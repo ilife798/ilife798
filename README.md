@@ -42,6 +42,7 @@
   - 显示任务列表、运行记录
   - 积分任务运行中通知（Android 16+ 提升为实时动态）
 - **账号：** 手机号验证码登录，显示头像、昵称、电话号码
+- **账号管理：** 支持多账号切换
 - **我的账单：**
   - 显示详细账单记录，支持切换钱包、账单类型
   - 支持充值/退款
@@ -62,7 +63,7 @@
   - 可启用启动时检查更新
   - 支持设置 GitHub 加速地址
   - 后台下载时通知栏显示进度（iOS 无）
-- **开发者模式：** 连点版本行 5 次开启/关闭，支持点击账号行进入账号信息页面
+- **开发者模式：** 连点版本行 5 次开启/关闭，开启后账号管理页面显示账号凭据卡片
 - 桌面快捷方式长按菜单显示“扫一扫”、“积分任务”入口（Android）
 - 宽屏设备自动使用侧边导航
 
@@ -73,6 +74,7 @@
 - Android Debug: `./gradlew :androidApp:assembleDebug`
 - Android Release: `./gradlew :androidApp:assembleRelease`
 - Android tests: `./gradlew :shared:testAndroidHostTest`
+- 签名配置：复制 `local.properties.example` 为 `local.properties` 并填写对应值
 
 ### iOS 构建（未签名）
 
@@ -119,17 +121,19 @@ cd /tmp/ios-sign && zip -qry ../ilife798-signed.ipa Payload
 - 检查格式：`./gradlew spotlessCheck`
 - 自动格式化：`./gradlew spotlessApply`
 
-## 🔑 敏感数据配置
+## 🔑 机密参数配置
 
-- Android 参数配置：复制 `secrets.properties.example` 为 `secrets.properties`
-- Android 签名配置：复制 `local.properties.example` 为 `local.properties`
+- 复制 `secrets.properties.example` 为 `secrets.properties` 并填写对应值
+- 三项缺失时本地仍可编译，但运行后接口请求与签名校验会失败
+- CI 通过 GitHub Secrets 提供同名三项；Release 构建缺任一项会直接失败，验证构建仅告警
 
 ## 📚 开放源代码许可
 [本项目所使用的第三方开源库及其许可证信息](shared/src/commonMain/composeResources/files/aboutlibraries.json)
 
 ## 🙏 感谢
 
-感谢 [Tune](https://github.com/tunecc) 提供 iOS 端代码。
+- 感谢 [Tune](https://github.com/tunecc) 提供 iOS 端代码。
+- 本项目参考了 [nocookies111/life-798](https://github.com/nocookies111/life-798) 部分代码。
 
 ## 📜 许可证
 
