@@ -46,6 +46,8 @@ fun BlurredTopAppBar(
         modifier = Modifier.appBarBlur(blurBackdrop),
         color = blurAppBarColor(blurBackdrop),
         scrollBehavior = scrollBehavior,
+        titlePadding = 28.dp,
+        navigationIconPadding = 20.dp,
         navigationIcon = {
             if (onBack != null) {
                 IconButton(onClick = onBack) {
@@ -79,7 +81,7 @@ fun PageScrollColumn(
                 .overScrollVertical()
                 .verticalScroll(scrollState)
                 .padding(contentPadding)
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 12.dp)
                 .padding(top = topPadding, bottom = bottomPadding),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         content = content,

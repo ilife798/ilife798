@@ -105,7 +105,7 @@ fun DeviceAddPage(
                     .overScrollVertical()
                     .verticalScroll(rememberScrollState())
                     .padding(paddingValues)
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 12.dp)
                     .padding(top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

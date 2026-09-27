@@ -343,7 +343,7 @@ fun DeviceDetailPage(
                         .fillMaxWidth()
                         .background(MiuixTheme.colorScheme.surface)
                         .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),

@@ -115,7 +115,7 @@ private fun SpendingCard(
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 12.dp, bottom = 16.dp)) {
             Text(
                 text = label,
                 style = MiuixTheme.textStyles.body2,
