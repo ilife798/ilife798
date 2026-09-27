@@ -18,10 +18,18 @@ data class AccountInfoDto(
     val pn: String = "",
 )
 
+// 依据任务列表 stype 交集判定凭据所属渠道
+enum class TokenPlatform {
+    APP, // 设备控制（stype 交集只剩 1）
+    MAIN, // 积分任务（stype 交集只剩 5）
+    UNKNOWN,
+}
+
 data class TokenProbe(
     val appValid: Boolean,
     val mainValid: Boolean,
     val uid: String = "",
+    val platform: TokenPlatform = TokenPlatform.UNKNOWN,
 )
 
 data class DeviceDto(

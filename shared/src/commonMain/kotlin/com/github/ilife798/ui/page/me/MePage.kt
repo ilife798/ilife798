@@ -101,14 +101,20 @@ private fun AccountSection(
         if (hasApp) viewModel.loadAccountInfo()
     }
 
-    SmallTitle(text = "账号", insideMargin = PaddingValues(16.dp, 8.dp))
+    SmallTitle(text = "账号", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .then(if (viewModel.developerMode) Modifier.clickable { onAccountClick() } else Modifier)
-                    .padding(16.dp),
+                    .then(
+                        // 列表非空 ⇒ 曾有账号（已登录必有条目），未登录且无账号时仅开发者模式可进
+                        if (viewModel.developerMode || viewModel.state.accountList.isNotEmpty()) {
+                            Modifier.clickable { onAccountClick() }
+                        } else {
+                            Modifier
+                        },
+                    ).padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

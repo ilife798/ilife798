@@ -54,12 +54,14 @@ import kotlin.time.Duration.Companion.milliseconds
 fun LoginPage(
     viewModel: AppViewModel,
     isAlipay: Boolean = false,
+    switchAccount: Boolean = false,
     onBack: () -> Unit,
 ) {
     val account = viewModel.state.account
     val accountInfo = viewModel.state.accountInfo
     var phone by remember {
-        val initial = account.phone.ifEmpty { accountInfo.pn }
+        // 切换账号时不回填当前账号手机号
+        val initial = if (switchAccount) "" else account.phone.ifEmpty { accountInfo.pn }
         mutableStateOf(TextFieldValue(text = initial, selection = TextRange(initial.length)))
     }
     var graphCode by remember { mutableStateOf("") }
@@ -76,7 +78,14 @@ fun LoginPage(
     // 倒计时状态（协程由 LaunchedEffect 承载，随页面离开自动取消）
     var smsCountdown by remember { mutableIntStateOf(0) }
 
-    val loginDone = if (isAlipay) account.pointsLoginDone else account.appToken.isNotEmpty()
+    // 进入时的账号快照：切换账号模式下登录前后账号有变化即视为登录成功
+    val initialAccount = remember { account }
+    val loginDone =
+        if (switchAccount) {
+            account != initialAccount
+        } else {
+            if (isAlipay) account.pointsLoginDone else account.appToken.isNotEmpty()
+        }
 
     LaunchedEffect(loginDone) {
         if (loginDone) onBack()
@@ -93,6 +102,7 @@ fun LoginPage(
 
     // 已有一次登录（本页或另一渠道）时，自动回填手机号，仅在输入框为空时填充，光标置于末尾
     LaunchedEffect(account.phone, accountInfo.pn) {
+        if (switchAccount) return@LaunchedEffect
         if (phone.text.isEmpty()) {
             val saved = account.phone.ifEmpty { accountInfo.pn }
             if (saved.isNotEmpty()) {

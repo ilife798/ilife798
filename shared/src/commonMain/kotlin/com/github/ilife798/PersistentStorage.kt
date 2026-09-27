@@ -38,6 +38,8 @@ object StorageKeys {
     const val UID = "account_uid"
     const val TOKEN = "account_token"
     const val APP_TOKEN = "account_app_token"
+    const val ACCOUNT_LIST = "account_list"
+    const val CURRENT_ACCOUNT_INDEX = "account_current_index"
     const val DYNAMIC_COLOR = "setting_dynamic_color"
     const val CUSTOM_COLOR = "setting_custom_color"
     const val PALETTE_STYLE = "setting_palette_style"

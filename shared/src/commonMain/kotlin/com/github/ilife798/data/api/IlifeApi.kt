@@ -22,6 +22,7 @@ import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.util.AttributeKey
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +30,9 @@ import kotlinx.serialization.json.jsonObject
 
 // 时间戳毫秒/秒归一阈值（约 1973-03，秒级远小于此值、毫秒级远大于此值）
 private const val MILLIS_THRESHOLD = 100_000_000_000L
+
+// 请求携带的 token，用于会话失效回调归属判断
+private val requestAuthTokenKey = AttributeKey<String>("ilife798.request.auth.token")
 
 class IlifeApi(
     private val client: HttpClient = createHttpClient(),
@@ -62,10 +66,12 @@ class IlifeApi(
     ) {
         header("Authorization", token)
         header("ApplicationType", appType)
+        attributes.put(requestAuthTokenKey, token)
     }
 
-    // 服务端在登录态失效时对所有需鉴权接口返回 code = -99
-    var onSessionExpired: (() -> Unit)? = null
+    // 服务端在登录态失效时对所有需鉴权接口返回 code = -99；回调携带发起请求的 token，
+    // 供上层区分是当前账号过期还是切换后旧请求的残留信号
+    var onSessionExpired: ((String) -> Unit)? = null
 
     // 接口返回非 0 业务码时回调服务端错误信息，供上层直接以 Toast 展示
     var onApiError: ((String) -> Unit)? = null
@@ -76,13 +82,22 @@ class IlifeApi(
         reportError: Boolean = true,
     ): JsonObject {
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
-        if (notifyExpiry) checkSessionExpired(body)
+        if (notifyExpiry) {
+            checkSessionExpired(
+                body,
+                response.call.request.attributes
+                    .getOrNull(requestAuthTokenKey),
+            )
+        }
         if (reportError) reportIfError(body)
         return body
     }
 
-    private fun checkSessionExpired(body: JsonObject) {
-        if (body.intOrNull("code") == -99) onSessionExpired?.invoke()
+    private fun checkSessionExpired(
+        body: JsonObject,
+        token: String?,
+    ) {
+        if (body.intOrNull("code") == -99) onSessionExpired?.invoke(token ?: "")
     }
 
     private fun reportIfError(body: JsonObject) {
@@ -154,10 +169,11 @@ class IlifeApi(
     suspend fun getAccountInfo(
         token: String,
         notifyExpiry: Boolean = true,
+        appType: String = APP_TYPE_DEVICE,
     ): AccountInfoDto? {
         val response =
             client.apiGet("ui/app/master") {
-                apiHeaders(token, APP_TYPE_DEVICE)
+                apiHeaders(token, appType)
             }
         val body = bodyJson(response, notifyExpiry, reportError = false)
         val account = body.obj("data")?.obj("account") ?: return null
@@ -171,24 +187,83 @@ class IlifeApi(
 
     // 探测一条登录信息的有效性，用于手动导入校验；不触发会话失效登出
     suspend fun probeToken(token: String): TokenProbe {
+        var platform = TokenPlatform.UNKNOWN
         val appInfo =
             try {
                 getAccountInfo(token, notifyExpiry = false)
             } catch (_: Exception) {
                 null
             }
+                // 积分 token 在设备渠道可能取不到账号信息，换积分渠道再试，保证能拿到 uid 做同账号校验
+                ?: try {
+                    getAccountInfo(token, notifyExpiry = false, appType = APP_TYPE_POINTS)
+                } catch (_: Exception) {
+                    null
+                }
         val mainValid =
             try {
                 val response =
                     client.apiGet("acc/score/mission-lst") {
-                        apiHeaders(token, APP_TYPE_DEVICE)
+                        apiHeaders(token, APP_TYPE_POINTS)
                     }
-                bodyJson(response, notifyExpiry = false, reportError = false).intOrNull("code") == 0
+                val body = bodyJson(response, notifyExpiry = false, reportError = false)
+                val ok = body.intOrNull("code") == 0
+                if (ok) platform = missionPlatform(body)
+                ok
             } catch (_: Exception) {
                 false
             }
-        return TokenProbe(appValid = appInfo != null, mainValid = mainValid, uid = appInfo?.id ?: "")
+        return TokenProbe(appValid = appInfo != null, mainValid = mainValid, uid = appInfo?.id ?: "", platform = platform)
     }
+
+    // 渠道判定：取任务列表 stype 的交集，只剩 {1} 为设备控制、只剩 {5} 为积分任务，
+    // 交集冲突/字段缺失/接口失败均判为无法确定
+    private fun missionPlatform(body: JsonObject): TokenPlatform {
+        val missions = body.obj("data")?.arr("missions")
+        if (missions.isNullOrEmpty()) return TokenPlatform.UNKNOWN
+        var applicable = setOf(1, 5)
+        for (item in missions) {
+            val obj = item as? JsonObject ?: return TokenPlatform.UNKNOWN
+            val stype = obj.arr("stype") ?: return TokenPlatform.UNKNOWN
+            val types =
+                stype
+                    .mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
+                    .toSet()
+            if (types.isEmpty() || types.any { it != 1 && it != 5 }) return TokenPlatform.UNKNOWN
+            applicable = applicable.intersect(types)
+            if (applicable.isEmpty()) return TokenPlatform.UNKNOWN
+        }
+        return when (applicable.singleOrNull()) {
+            1 -> TokenPlatform.APP
+            5 -> TokenPlatform.MAIN
+            else -> TokenPlatform.UNKNOWN
+        }
+    }
+
+    // 探测一条登录信息是否已失效
+    // true = 明确失效（code = -99，或响应成功但不再返回账号数据），false = 有效（或非失效类业务码），null = 网络失败无法判定
+    suspend fun isTokenExpired(token: String): Boolean? =
+        try {
+            val response =
+                client.apiGet("ui/app/master") {
+                    apiHeaders(token, APP_TYPE_DEVICE)
+                }
+            val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val code = body.intOrNull("code")
+            val hasAccount =
+                body
+                    .obj("data")
+                    ?.obj("account")
+                    ?.str("id")
+                    ?.isNotEmpty() == true
+            when (code) {
+                -99 -> true
+                0 if !hasAccount -> true
+                else -> false
+            }
+        } catch (_: Exception) {
+            null
+        }
 
     // 账号设置
     suspend fun setUseScore(
@@ -202,7 +277,7 @@ class IlifeApi(
                 setBody(requestJson.encodeToString(SetUseScoreRequest(value)))
                 apiHeaders(token, appType)
             }
-        return parseDevResult(response.bodyAsText(), reportError = false)
+        return parseDevResult(response.bodyAsText(), reportError = false, token = token)
     }
 
     // 设备
@@ -249,7 +324,7 @@ class IlifeApi(
                 parameter("cnt", "1")
                 apiHeaders(token, appType)
             }
-        return parseDevResult(response.bodyAsText(), reportError)
+        return parseDevResult(response.bodyAsText(), reportError, token = token)
     }
 
     suspend fun devEnd(
@@ -263,7 +338,7 @@ class IlifeApi(
                 parameter("rcp", "false")
                 apiHeaders(token, appType)
             }
-        return parseDevResult(response.bodyAsText())
+        return parseDevResult(response.bodyAsText(), token = token)
     }
 
     suspend fun devFavo(
@@ -277,7 +352,7 @@ class IlifeApi(
                 parameter("remove", if (remove) "1" else "0")
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
-        return parseDevResult(response.bodyAsText())
+        return parseDevResult(response.bodyAsText(), token = token)
     }
 
     // 扫码：用二维码中解析出的 id 换取设备信息
@@ -399,9 +474,10 @@ class IlifeApi(
     private fun parseDevResult(
         raw: String,
         reportError: Boolean = true,
+        token: String?,
     ): DevResult {
         val body = json.parseToJsonElement(raw).jsonObject
-        checkSessionExpired(body)
+        checkSessionExpired(body, token)
         val code = body.int("code", -1)
         val msg = body.str("msg")
         if (reportError && code != 0 && code != -99) emitApiError(msg)
@@ -504,7 +580,7 @@ class IlifeApi(
                 setBody(body)
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
-        return parseDevResult(response.bodyAsText(), reportError = false)
+        return parseDevResult(response.bodyAsText(), reportError = false, token = token)
     }
 
     suspend fun getScoreList(
@@ -695,7 +771,7 @@ class IlifeApi(
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
-        checkSessionExpired(body)
+        checkSessionExpired(body, token)
         if (body.intOrNull("code") != 0) {
             emitApiError(body.strOrNull("msg"))
             return null
@@ -730,7 +806,7 @@ class IlifeApi(
                 setBody(requestJson.encodeToString(RefundWalletRequest(eid)))
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
-        return parseDevResult(response.bodyAsText())
+        return parseDevResult(response.bodyAsText(), token = token)
     }
 
     // 积分兑换：将积分兑换为指定钱包余额，成功返回账单号用于核验结果
@@ -747,7 +823,7 @@ class IlifeApi(
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
-        checkSessionExpired(body)
+        checkSessionExpired(body, token)
         if (body.intOrNull("code") != 0) {
             emitApiError(body.strOrNull("msg"))
             return null

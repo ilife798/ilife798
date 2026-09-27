@@ -1,5 +1,8 @@
 package com.github.ilife798.data.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class Account(
     val phone: String = "",
     val isLoggedIn: Boolean = false,
@@ -197,14 +200,24 @@ enum class PaletteStyle(
 
 const val DEFAULT_SEED_COLOR: Int = 0xFF6750A4.toInt()
 
+@Serializable
 data class AccountInfo(
     val img: String = "",
     val name: String = "",
     val pn: String = "",
 )
 
+// 账号列表条目：凭据 + 资料缓存
+@Serializable
+data class AccountEntry(
+    val account: Account = Account(),
+    val info: AccountInfo = AccountInfo(),
+)
+
 data class AppState(
     val account: Account = Account(),
+    val accountList: List<AccountEntry> = emptyList(),
+    val currentAccountIndex: Int = -1,
     val devices: List<Device> = emptyList(),
     val points: PointsInfo = PointsInfo(),
     val wallets: List<WalletAccount> = emptyList(),

@@ -493,6 +493,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                     LoginPage(
                         viewModel = viewModel,
                         isAlipay = key.isAlipay,
+                        switchAccount = key.switchAccount,
                         onBack = onBack,
                     )
                 }
@@ -510,6 +511,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                     AccountPage(
                         viewModel = viewModel,
                         onBack = onBack,
+                        onLoginClick = { isAlipay -> navigate(Page.Login(isAlipay = isAlipay, switchAccount = true)) },
                     )
                 }
             }

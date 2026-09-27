@@ -13,9 +13,11 @@ import com.github.ilife798.StorageKeys
 import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.api.ScoreDto
+import com.github.ilife798.data.api.TokenPlatform
 import com.github.ilife798.data.api.int
 import com.github.ilife798.data.api.str
 import com.github.ilife798.data.model.Account
+import com.github.ilife798.data.model.AccountEntry
 import com.github.ilife798.data.model.AccountInfo
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.BillDetailInfo
@@ -56,6 +58,9 @@ import kotlin.time.Duration.Companion.milliseconds
 
 private const val SCORE_PAGE_SIZE = 200
 
+// 账号列表持久化
+private val accountListJson = Json { ignoreUnknownKeys = true }
+
 // 同一份数据的重复拉取冷却时间（DeviceController 共用）
 internal const val LOAD_COOLDOWN_MS = 5000L
 
@@ -72,7 +77,7 @@ class AppViewModel : ViewModel() {
     // HttpClient 构建较重，延迟到首次网络调用时再创建，避免阻塞首帧渲染
     private val api by lazy {
         IlifeApi().apply {
-            onSessionExpired = { handleSessionExpired() }
+            onSessionExpired = { token -> handleSessionExpired(token) }
             onApiError = { showToast(it) }
         }
     }
@@ -192,8 +197,10 @@ class AppViewModel : ViewModel() {
         }
     }
 
-    private fun handleSessionExpired() {
-        if (state.account.token.isEmpty() && state.account.appToken.isEmpty()) return
+    private fun handleSessionExpired(expiredToken: String? = null) {
+        val account = state.account
+        if (account.token.isEmpty() && account.appToken.isEmpty()) return
+        if (!expiredToken.isNullOrEmpty() && expiredToken != account.token && expiredToken != account.appToken) return
         viewModelScope.launch {
             if (state.account.token.isEmpty() && state.account.appToken.isEmpty()) return@launch
             showToast("登录状态失效，请重新登录")
@@ -204,19 +211,45 @@ class AppViewModel : ViewModel() {
     private fun loadSavedAccount() {
         try {
             val storage = AppStorage.instance
-            val isLoggedIn = storage.getBoolean(StorageKeys.IS_LOGGED_IN)
-            if (isLoggedIn) {
-                val account =
-                    Account(
-                        phone = storage.getString(StorageKeys.PHONE) ?: "",
-                        isLoggedIn = true,
-                        pointsLoginDone = storage.getBoolean(StorageKeys.POINTS_LOGIN_DONE),
-                        uid = storage.getString(StorageKeys.UID) ?: "",
-                        token = storage.getString(StorageKeys.TOKEN) ?: "",
-                        appToken = storage.getString(StorageKeys.APP_TOKEN) ?: "",
+            val listJson = storage.getString(StorageKeys.ACCOUNT_LIST)
+            var list =
+                try {
+                    if (listJson.isNullOrBlank()) emptyList() else accountListJson.decodeFromString<List<AccountEntry>>(listJson)
+                } catch (e: Exception) {
+                    logError("loadSavedAccount.parse", e)
+                    emptyList()
+                }
+            var index = storage.getInt(StorageKeys.CURRENT_ACCOUNT_INDEX, -1)
+            if (list.isEmpty() && storage.getBoolean(StorageKeys.IS_LOGGED_IN)) {
+                // 旧版单账号数据迁移为账号列表
+                list =
+                    listOf(
+                        AccountEntry(
+                            Account(
+                                phone = storage.getString(StorageKeys.PHONE) ?: "",
+                                isLoggedIn = true,
+                                pointsLoginDone = storage.getBoolean(StorageKeys.POINTS_LOGIN_DONE),
+                                uid = storage.getString(StorageKeys.UID) ?: "",
+                                token = storage.getString(StorageKeys.TOKEN) ?: "",
+                                appToken = storage.getString(StorageKeys.APP_TOKEN) ?: "",
+                            ),
+                        ),
                     )
-                state = state.copy(account = account)
+                index = 0
+            }
+            if (index !in list.indices) index = -1
+            if (index >= 0) {
+                val entry = list[index]
+                state =
+                    state.copy(
+                        account = entry.account,
+                        accountInfo = entry.info,
+                        accountList = list,
+                        currentAccountIndex = index,
+                    )
                 checkLoginStatus()
+            } else {
+                state = state.copy(accountList = list, currentAccountIndex = -1)
             }
         } catch (e: Exception) {
             logError("loadSavedAccount", e)
@@ -245,6 +278,12 @@ class AppViewModel : ViewModel() {
 
     private fun saveAccount() {
         try {
+            // 当前账号与资料同步回列表条目
+            val list = state.accountList.toMutableList()
+            if (state.currentAccountIndex in list.indices) {
+                list[state.currentAccountIndex] = AccountEntry(state.account, state.accountInfo)
+                state = state.copy(accountList = list)
+            }
             val storage = AppStorage.instance
             val account = state.account
             storage.saveBoolean(StorageKeys.IS_LOGGED_IN, account.isLoggedIn)
@@ -253,12 +292,128 @@ class AppViewModel : ViewModel() {
             storage.saveString(StorageKeys.UID, account.uid)
             storage.saveString(StorageKeys.TOKEN, account.token)
             storage.saveString(StorageKeys.APP_TOKEN, account.appToken)
+            storage.saveString(StorageKeys.ACCOUNT_LIST, accountListJson.encodeToString(list))
+            storage.saveInt(StorageKeys.CURRENT_ACCOUNT_INDEX, state.currentAccountIndex)
         } catch (e: Exception) {
             logError("saveAccount", e)
         }
     }
 
-    // 账号信息页手动填写凭据
+    // 写入/合并账号列表并设为当前账号
+    private fun selectAccount(account: Account) {
+        val list = state.accountList.toMutableList()
+        var target = list.indexOfFirst { sameAccount(it.account, account) }
+        if (target < 0 && state.currentAccountIndex in list.indices) {
+            // 身份为空或与当前账号一致时视为当前账号更新，否则是新账号入列
+            val incomingKeyed = account.uid.isNotEmpty() || account.phone.isNotEmpty()
+            if (!incomingKeyed || sameAccount(account, state.account)) target = state.currentAccountIndex
+        }
+        val old = list.getOrNull(target)
+        val merged =
+            Account(
+                phone = account.phone.ifEmpty { old?.account?.phone ?: "" },
+                isLoggedIn = account.isLoggedIn || old?.account?.isLoggedIn == true,
+                pointsLoginDone = account.pointsLoginDone || old?.account?.pointsLoginDone == true,
+                uid = account.uid.ifEmpty { old?.account?.uid ?: "" },
+                token = account.token.ifEmpty { old?.account?.token ?: "" },
+                appToken = account.appToken.ifEmpty { old?.account?.appToken ?: "" },
+            )
+        val info =
+            state.accountInfo
+                .takeIf { it.name.isNotEmpty() || it.img.isNotEmpty() || it.pn.isNotEmpty() }
+                ?: old?.info
+                ?: AccountInfo()
+        if (target < 0) {
+            list.add(AccountEntry(merged, info))
+            target = list.lastIndex
+        } else {
+            list[target] = AccountEntry(merged, info)
+        }
+        state = state.copy(account = merged, accountInfo = info, accountList = list, currentAccountIndex = target)
+    }
+
+    private fun sameAccount(
+        a: Account,
+        b: Account,
+    ): Boolean = (a.uid.isNotEmpty() && a.uid == b.uid) || (a.phone.isNotEmpty() && a.phone == b.phone)
+
+    // 账号切换/凭据变更后重载各业务数据
+    private fun reloadAccountData() {
+        device.loadDeviceInfo()
+        loadAccountInfo()
+        loadScoreInfo()
+        wallet.loadSpendingStats()
+        task.loadMissions()
+    }
+
+    // 账号管理页切换账号：立即生效并重载数据
+    fun switchAccount(index: Int) {
+        val list = state.accountList
+        if (index !in list.indices || index == state.currentAccountIndex) return
+        val entry = list[index]
+        clearAccountData()
+        state =
+            state.copy(
+                account = entry.account,
+                accountInfo = entry.info,
+                currentAccountIndex = index,
+            )
+        saveAccount()
+        if (entry.account.hasAnyToken) reloadAccountData()
+        showToast("已切换账号")
+    }
+
+    private var validatingAccounts = false
+
+    // 进入账号管理页时校验其它账号有效性：仅服务端明确判定失效的移除，网络失败无法判定时一律保留
+    fun validateAccounts() {
+        if (validatingAccounts || state.accountList.isEmpty()) return
+        validatingAccounts = true
+        viewModelScope.launch {
+            try {
+                var removed = 0
+                val current = state.currentAccountIndex
+                // 快照遍历并跳过当前账号（其状态由正常请求流程负责判定）
+                state.accountList.forEachIndexed { index, entry ->
+                    if (index == current) return@forEachIndexed
+                    val token = entry.account.preferredToken
+                    if (token.isEmpty()) return@forEachIndexed
+                    val expired =
+                        try {
+                            withContext(Dispatchers.Default) { api.isTokenExpired(token) }
+                        } catch (e: Exception) {
+                            logError("validateAccounts", e)
+                            null
+                        }
+                    if (expired == true && removeAccountByToken(token)) removed++
+                }
+                if (removed > 0) showToast("已移除 $removed 个登录过期的账号")
+            } finally {
+                validatingAccounts = false
+            }
+        }
+    }
+
+    // 按凭据从列表移除条目，并维护当前索引指向
+    private fun removeAccountByToken(token: String): Boolean {
+        val list = state.accountList
+        val index = list.indexOfFirst { it.account.preferredToken == token }
+        if (index < 0) return false
+        val newList = list.toMutableList().also { it.removeAt(index) }
+        val current = state.currentAccountIndex
+        if (index == current) {
+            clearAccountData()
+            state = state.copy(account = Account(), accountList = newList, currentAccountIndex = -1)
+        } else if (index < current) {
+            state = state.copy(accountList = newList, currentAccountIndex = current - 1)
+        } else {
+            state = state.copy(accountList = newList)
+        }
+        saveAccount()
+        return true
+    }
+
+    // 账号管理页手动填写凭据
     fun updateAccountField(
         field: String,
         value: String,
@@ -277,17 +432,27 @@ class AppViewModel : ViewModel() {
                 showToast("登录信息无效，未保存")
                 return@launch
             }
-            // 自动纠正到正确的槽位：仅当目标渠道不可用、另一渠道可用时兜底纠正
+            val acc = state.account
+            // 按探测出的渠道纠正槽位：仅渠道明确且填错槽时换槽，目标槽已有值不覆盖；渠道判不出不纠正
             var target = field
-            if (field == "appToken" && !probe.appValid) {
-                target = "token"
-                showToast("检测为积分登录信息，已填入积分任务")
-            } else if (field == "token" && !probe.mainValid) {
+            var notice = "登录信息已保存"
+            if (probe.platform == TokenPlatform.APP && field != "appToken") {
+                if (acc.appToken.isNotEmpty()) {
+                    showToast("检测为设备登录信息，但设备控制已有登录信息，未保存")
+                    return@launch
+                }
                 target = "appToken"
-                showToast("检测为设备登录信息，已填入设备控制")
+                notice = "检测为设备登录信息，已填入设备控制"
+            } else if (probe.platform == TokenPlatform.MAIN && field != "token") {
+                if (acc.token.isNotEmpty()) {
+                    showToast("检测为积分登录信息，但积分任务已有登录信息，未保存")
+                    return@launch
+                }
+                target = "token"
+                notice = "检测为积分登录信息，已填入积分任务"
             }
-            // 同一账户校验：与另一槽已有凭据的 uid 比对
-            val otherToken = if (target == "appToken") state.account.token else state.account.appToken
+            // 同一账户校验：与另一槽已有凭据比对 uid；任一侧 uid 无法取得时无法确认归属，拒绝保存
+            val otherToken = if (target == "appToken") acc.token else acc.appToken
             if (otherToken.isNotEmpty()) {
                 val otherUid =
                     try {
@@ -296,12 +461,15 @@ class AppViewModel : ViewModel() {
                         logError("verifyOtherToken", e)
                         ""
                     }
-                if (probe.uid.isNotEmpty() && otherUid.isNotEmpty() && probe.uid != otherUid) {
+                if (probe.uid.isEmpty() || otherUid.isEmpty()) {
+                    showToast("无法确认两条登录信息属于同一账户，未保存")
+                    return@launch
+                }
+                if (probe.uid != otherUid) {
                     showToast("两条登录信息不属于同一账户，未保存")
                     return@launch
                 }
             }
-            val acc = state.account
             val updated =
                 when (target) {
                     "appToken" -> acc.copy(appToken = input, isLoggedIn = true, uid = probe.uid.ifEmpty { acc.uid })
@@ -310,38 +478,11 @@ class AppViewModel : ViewModel() {
                 }
             // 凭据变更等于切换身份，先清掉上一个身份残留的数据与冷却计时，再加载
             clearAccountData()
-            state = state.copy(account = updated)
+            selectAccount(updated)
             saveAccount()
-            device.loadDeviceInfo()
-            loadAccountInfo()
-            loadScoreInfo()
-            wallet.loadSpendingStats()
-            task.loadMissions()
-            showToast("登录信息已保存")
+            reloadAccountData()
+            showToast(notice)
         }
-    }
-
-    // 账号信息页清空指定渠道的凭据（长按编辑时使用）
-    fun clearAccountField(field: String) {
-        val acc = state.account
-        val updated =
-            when (field) {
-                "appToken" -> acc.copy(appToken = "")
-                "token" -> acc.copy(token = "", pointsLoginDone = false)
-                else -> return
-            }
-        val stillLoggedIn = updated.hasAnyToken
-        // 两条凭据都清空后，uid 已无来源，一并清空
-        val cleared = if (stillLoggedIn) updated else updated.copy(uid = "")
-        clearAccountData()
-        state = state.copy(account = cleared.copy(isLoggedIn = stillLoggedIn))
-        saveAccount()
-        device.loadDeviceInfo(force = true)
-        loadAccountInfo()
-        loadScoreInfo()
-        wallet.loadSpendingStats()
-        task.loadMissions()
-        showToast(if (field == "appToken") "已清空设备控制" else "已清空积分任务")
     }
 
     // 验证码
@@ -430,18 +571,20 @@ class AppViewModel : ViewModel() {
                 if (result.success) {
                     clearAccountData()
                     val prev = state.account
-                    state =
-                        state.copy(
-                            account =
-                                prev.copy(
-                                    phone = phone,
-                                    isLoggedIn = true,
-                                    pointsLoginDone = if (isAlipay) true else prev.pointsLoginDone,
-                                    uid = result.uid.ifEmpty { prev.uid },
-                                    token = if (isAlipay) result.token else prev.token,
-                                    appToken = if (!isAlipay) result.token else prev.appToken,
-                                ),
-                        )
+                    // 身份不同则不继承旧凭据，作为新账号入列
+                    val sameIdentity =
+                        (prev.uid.isNotEmpty() && prev.uid == result.uid) || (prev.phone.isNotEmpty() && prev.phone == phone)
+                    val base = if (sameIdentity) prev else Account()
+                    selectAccount(
+                        base.copy(
+                            phone = phone,
+                            isLoggedIn = true,
+                            pointsLoginDone = if (isAlipay) true else base.pointsLoginDone,
+                            uid = result.uid.ifEmpty { base.uid },
+                            token = if (isAlipay) result.token else base.token,
+                            appToken = if (!isAlipay) result.token else base.appToken,
+                        ),
+                    )
                     device.loadDeviceInfo()
                     loadAccountInfo()
                     if (isAlipay) loadScoreInfo()
@@ -496,18 +639,12 @@ class AppViewModel : ViewModel() {
         resetCaptcha()
         isLoading = false
         errorMessage = null
-        state = state.copy(account = Account())
-        try {
-            val storage = AppStorage.instance
-            storage.saveBoolean(StorageKeys.IS_LOGGED_IN, false)
-            storage.saveString(StorageKeys.PHONE, "")
-            storage.saveBoolean(StorageKeys.POINTS_LOGIN_DONE, false)
-            storage.saveString(StorageKeys.UID, "")
-            storage.saveString(StorageKeys.TOKEN, "")
-            storage.saveString(StorageKeys.APP_TOKEN, "")
-        } catch (e: Exception) {
-            logError("logout", e)
-        }
+        // 退出登录：从列表移除当前账号并回到未登录，其余账号保留
+        val list = state.accountList.toMutableList()
+        val index = state.currentAccountIndex
+        if (index in list.indices) list.removeAt(index)
+        state = state.copy(account = Account(), accountList = list, currentAccountIndex = -1)
+        saveAccount()
     }
 
     val homeDeviceType: HomeDeviceType get() = device.homeDeviceType
@@ -560,9 +697,16 @@ class AppViewModel : ViewModel() {
                     handleSessionExpired()
                     return@launch
                 }
-                val newInfo = AccountInfo(img = info.img, name = info.name, pn = info.pn)
+                // 与已有资料逐字段合并
+                val newInfo =
+                    AccountInfo(
+                        img = info.img.ifEmpty { state.accountInfo.img },
+                        name = info.name.ifEmpty { state.accountInfo.name },
+                        pn = info.pn.ifEmpty { state.accountInfo.pn },
+                    )
                 if (state.accountInfo != newInfo) {
                     state = state.copy(accountInfo = newInfo)
+                    saveAccount()
                 }
             } catch (e: Exception) {
                 logError("loadAccountInfo", e)

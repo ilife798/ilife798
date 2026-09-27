@@ -9,6 +9,7 @@ sealed class Page : NavKey {
 
     @Serializable data class Login(
         val isAlipay: Boolean = false,
+        val switchAccount: Boolean = false,
     ) : Page()
 
     @Serializable data object Score : Page()
