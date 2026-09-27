@@ -37,6 +37,7 @@ import com.github.ilife798.logDebug
 import com.github.ilife798.pay.AlipayPayResult
 import com.github.ilife798.showToast
 import com.github.ilife798.supportsDynamicColor
+import com.github.ilife798.supportsPredictiveBack
 import com.github.ilife798.toImageBitmap
 import com.github.ilife798.update.UpdateController
 import com.github.ilife798.update.UpdateDialogState
@@ -50,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import top.yukonga.miuix.kmp.shader.isRuntimeShaderSupported
 import kotlin.time.Duration.Companion.milliseconds
 
 private const val SCORE_PAGE_SIZE = 200
@@ -169,7 +171,7 @@ class AppViewModel : ViewModel() {
             val storage = AppStorage.instance
             state =
                 state.copy(
-                    // 平台不支持的设置项强制为默认值（动态取色需 Android 12+，iOS 不支持）
+                    // 不支持的设置项隐藏并强制关闭，升级变支持后按存储/默认值恢复
                     dynamicColor = storage.getBoolean(StorageKeys.DYNAMIC_COLOR, true) && supportsDynamicColor,
                     customColor = storage.getBoolean(StorageKeys.CUSTOM_COLOR, true),
                     paletteStyle =
@@ -177,8 +179,9 @@ class AppViewModel : ViewModel() {
                             ?: PaletteStyle.TonalSpot,
                     seedColor = storage.getInt(StorageKeys.SEED_COLOR, DEFAULT_SEED_COLOR),
                     floatingNav = storage.getBoolean(StorageKeys.FLOATING_NAV, false),
-                    appBlur = storage.getBoolean(StorageKeys.APP_BLUR, true) && !isIOS,
-                    predictiveBackEnabled = if (isIOS) true else storage.getBoolean(StorageKeys.PREDICTIVE_BACK, true),
+                    appBlur = storage.getBoolean(StorageKeys.APP_BLUR, true) && !isIOS && isRuntimeShaderSupported(),
+                    predictiveBackEnabled =
+                        storage.getBoolean(StorageKeys.PREDICTIVE_BACK, true) && supportsPredictiveBack,
                     themeMode =
                         ThemeMode.entries.firstOrNull { it.name == storage.getString(StorageKeys.THEME_MODE) }
                             ?: ThemeMode.System,
