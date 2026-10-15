@@ -22,7 +22,9 @@ import com.github.ilife798.data.model.AccountInfo
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.DEFAULT_SEED_COLOR
+import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
+import com.github.ilife798.data.model.DeviceNotes
 import com.github.ilife798.data.model.HomeDeviceType
 import com.github.ilife798.data.model.MissionInfo
 import com.github.ilife798.data.model.PaletteStyle
@@ -158,6 +160,8 @@ class AppViewModel : ViewModel() {
     init {
         loadSettings()
         device.loadHomeDeviceTypePref()
+        device.loadDeviceNotesPref()
+        device.loadDeviceAliasesPref()
         loadSavedAccount()
         update.loadSettings()
         registerLaunch()
@@ -655,6 +659,35 @@ class AppViewModel : ViewModel() {
     val autoDeduct: Boolean get() = device.autoDeduct
 
     fun selectHomeDeviceType(type: HomeDeviceType) = device.selectHomeDeviceType(type)
+
+    val deviceNotes: DeviceNotes get() = device.deviceNotes
+
+    fun deviceNote(deviceId: String): String = device.deviceNote(deviceId)
+
+    fun updateDeviceNote(
+        deviceId: String,
+        text: String,
+    ): Boolean = device.updateDeviceNote(deviceId, text)
+
+    fun dropDeviceNotes(deviceIds: Collection<String>) = device.dropDeviceNotes(deviceIds)
+
+    val deviceAliases: DeviceAliases get() = device.deviceAliases
+
+    fun deviceAlias(deviceId: String): String = device.deviceAlias(deviceId)
+
+    fun updateDeviceAlias(
+        deviceId: String,
+        text: String,
+    ): Boolean = device.updateDeviceAlias(deviceId, text)
+
+    fun clearAllDeviceNotes(): Int = device.clearAllDeviceNotes()
+
+    fun clearAllDeviceAliases(): Int = device.clearAllDeviceAliases()
+
+    fun clearDeviceCustomInfo(
+        noteDeviceIds: Collection<String>,
+        aliasDeviceIds: Collection<String>,
+    ): Int = device.clearDeviceCustomInfo(noteDeviceIds, aliasDeviceIds)
 
     fun updateAutoDeduct(enabled: Boolean) = device.updateAutoDeduct(enabled)
 

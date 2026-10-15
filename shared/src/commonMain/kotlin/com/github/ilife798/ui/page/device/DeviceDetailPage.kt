@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,6 +61,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Favorites
 import top.yukonga.miuix.kmp.icon.extended.FavoritesFill
 import top.yukonga.miuix.kmp.icon.extended.GridView
+import top.yukonga.miuix.kmp.icon.extended.Rename
 import top.yukonga.miuix.kmp.preference.RadioButtonLocation
 import top.yukonga.miuix.kmp.preference.RadioButtonPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -215,6 +217,8 @@ fun DeviceDetailPage(
     var showStartConfirm by remember(deviceId) { mutableStateOf(false) }
     var showSettleConfirm by remember(deviceId) { mutableStateOf(false) }
     var showTileConfirm by remember(deviceId) { mutableStateOf(false) }
+    var showNoteEdit by remember(deviceId) { mutableStateOf(false) }
+    var showAliasEdit by remember(deviceId) { mutableStateOf(false) }
 
     val followed = state.devices.any { it.id == deviceId }
 
@@ -352,7 +356,10 @@ fun DeviceDetailPage(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { showTileConfirm = true },
+                        modifier =
+                            Modifier
+                                .width(48.dp)
+                                .clickable { showTileConfirm = true },
                     ) {
                         Icon(
                             imageVector = MiuixIcons.GridView,
@@ -418,13 +425,18 @@ fun DeviceDetailPage(
         PageScrollColumn(blurBackdrop, scrollBehavior, paddingValues) {
             DeviceInfoCard(
                 deviceId = deviceId,
-                name = name,
+                name = viewModel.deviceAlias(deviceId).ifEmpty { name },
                 dtype = dtype,
                 geneStatus = geneStatus,
                 deviceStatus = deviceStatus,
                 enterpriseName = detail?.enterpriseName ?: "",
                 enterpriseAbbr = detail?.enterpriseAbbr ?: "",
                 contactPhone = detail?.contactPhone ?: "",
+                note = viewModel.deviceNote(deviceId),
+                onNoteClick = { showNoteEdit = true },
+                alias = viewModel.deviceAlias(deviceId),
+                rawName = name,
+                onAliasClick = { showAliasEdit = true },
             )
 
             if (isLoggedIn) {
@@ -514,6 +526,38 @@ fun DeviceDetailPage(
             onDismiss = { showTileConfirm = false },
         )
     }
+
+    if (showNoteEdit) {
+        DeviceNoteEditDialog(
+            deviceId = deviceId,
+            initialText = viewModel.deviceNote(deviceId),
+            appBlur = state.appBlur,
+            onDismiss = { showNoteEdit = false },
+            onConfirm = { text ->
+                val changed = viewModel.updateDeviceNote(deviceId, text)
+                showNoteEdit = false
+                if (changed) {
+                    showToast(if (text.isBlank()) "已清除备注" else "备注已保存")
+                }
+            },
+        )
+    }
+
+    if (showAliasEdit) {
+        DeviceAliasEditDialog(
+            deviceId = deviceId,
+            initialText = viewModel.deviceAlias(deviceId),
+            appBlur = state.appBlur,
+            onDismiss = { showAliasEdit = false },
+            onConfirm = { text ->
+                val changed = viewModel.updateDeviceAlias(deviceId, text)
+                showAliasEdit = false
+                if (changed) {
+                    showToast(if (text.isBlank()) "已清除别名" else "别名已保存")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -526,6 +570,11 @@ private fun DeviceInfoCard(
     enterpriseName: String,
     enterpriseAbbr: String,
     contactPhone: String,
+    note: String,
+    alias: String,
+    rawName: String,
+    onNoteClick: () -> Unit,
+    onAliasClick: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -537,6 +586,24 @@ private fun DeviceInfoCard(
                 },
                 id = deviceId,
                 onIdClick = { copyToClipboard(deviceId, "已复制设备编号") },
+                // 点击设备名即可编辑别名
+                onTitleClick = onAliasClick,
+            )
+            // 别名入口固定显示在备注行上方：无别名时给出占位引导，否则用户无从新建
+            InfoRow(
+                label = "别名",
+                value = alias,
+                onValueClick = onAliasClick,
+                placeholder = "添加别名",
+            )
+            // 展示设备原始名称，与可编辑的别名区分开
+            InfoRow("名称", rawName)
+            // 备注入口固定显示：无备注时给出占位引导，否则用户无从新建
+            InfoRow(
+                label = "备注",
+                value = note,
+                onValueClick = onNoteClick,
+                placeholder = "添加备注",
             )
             if (enterpriseName.isNotEmpty()) {
                 InfoRow("商家", enterpriseName)

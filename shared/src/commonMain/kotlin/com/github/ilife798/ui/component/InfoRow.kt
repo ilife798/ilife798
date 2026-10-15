@@ -17,7 +17,9 @@ fun InfoRow(
     label: String,
     value: String,
     onValueClick: (() -> Unit)? = null,
+    placeholder: String = "",
 ) {
+    val showPlaceholder = value.isEmpty() && placeholder.isNotEmpty()
     Row(
         modifier =
             Modifier
@@ -32,9 +34,14 @@ fun InfoRow(
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )
         Text(
-            text = value,
+            text = if (showPlaceholder) placeholder else value,
             style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurface,
+            color =
+                if (showPlaceholder) {
+                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                } else {
+                    MiuixTheme.colorScheme.onSurface
+                },
             modifier =
                 if (onValueClick != null) {
                     Modifier.clickable(onClick = onValueClick)

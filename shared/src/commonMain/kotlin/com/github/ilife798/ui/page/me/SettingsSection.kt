@@ -36,6 +36,7 @@ import com.github.ilife798.isIOS
 import com.github.ilife798.showToast
 import com.github.ilife798.supportsDynamicColor
 import com.github.ilife798.supportsPredictiveBack
+import com.github.ilife798.ui.component.ConfirmDialog
 import com.github.ilife798.ui.component.DisclaimerDialog
 import com.github.ilife798.ui.component.SwitchPreference
 import com.github.ilife798.ui.theme.ColorSwatchPreview
@@ -68,6 +69,9 @@ internal fun SettingsSection(
     }
     var showDisclaimerDialog by remember { mutableStateOf(false) }
     var showGithubProxyDialog by remember { mutableStateOf(false) }
+    var showClearDeviceInfo by remember { mutableStateOf(false) }
+    // 选择弹窗与二次确认之间暂存待删除项，null 表示当前没有待确认的删除
+    var pendingClear by remember { mutableStateOf<PendingClearSelection?>(null) }
     var versionTapCount by remember { mutableIntStateOf(0) }
     var lastVersionTapAt by remember { mutableLongStateOf(0L) }
 
@@ -181,6 +185,16 @@ internal fun SettingsSection(
             )
         }
     }
+    SmallTitle(text = "备份与重置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            ArrowPreference(
+                title = "清空设备自定义信息",
+                summary = "选择要清空的设备别名与备注，仅影响本机",
+                onClick = { showClearDeviceInfo = true },
+            )
+        }
+    }
     SmallTitle(text = "关于", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -227,6 +241,42 @@ internal fun SettingsSection(
                 onClick = { viewModel.openSponsor() },
             )
         }
+    }
+
+    if (showClearDeviceInfo) {
+        ClearDeviceInfoDialog(
+            aliases = viewModel.deviceAliases.entries(),
+            notes = viewModel.deviceNotes.entries(),
+            appBlur = state.appBlur,
+            onDismiss = { showClearDeviceInfo = false },
+            onClearSelected = { noteIds, aliasIds ->
+                // 先收起选择弹窗，把待删除项暂存，再走第二次确认，避免误触直接删
+                pendingClear = PendingClearSelection(noteIds, aliasIds)
+                showClearDeviceInfo = false
+            },
+        )
+    }
+
+    pendingClear?.let { pending ->
+        val total = pending.noteDeviceIds.size + pending.aliasDeviceIds.size
+        ConfirmDialog(
+            title = "清空设备自定义信息",
+            message =
+                "将删除选中的 $total 项（备注 ${pending.noteDeviceIds.size} 条、" +
+                    "别名 ${pending.aliasDeviceIds.size} 条），此操作不可撤销。",
+            appBlur = state.appBlur,
+            destructive = true,
+            onConfirm = {
+                val count =
+                    viewModel.clearDeviceCustomInfo(
+                        noteDeviceIds = pending.noteDeviceIds,
+                        aliasDeviceIds = pending.aliasDeviceIds,
+                    )
+                pendingClear = null
+                showToast(if (count > 0) "已清空 $count 项" else "没有可清空的内容")
+            },
+            onDismiss = { pendingClear = null },
+        )
     }
 
     if (showDisclaimerDialog) {
@@ -286,3 +336,14 @@ private fun PresetColorGrid(
         }
     }
 }
+
+/**
+ * 「清空设备自定义信息」在两次弹窗之间暂存的待删除项。
+ *
+ * 选择弹窗只负责收集勾选，确认删除前还要再问一次，因此需要把勾选结果从第一个
+ * 弹窗带到第二个弹窗。两个集合分别对应备注与别名命中的设备 ID。
+ */
+private data class PendingClearSelection(
+    val noteDeviceIds: List<String>,
+    val aliasDeviceIds: List<String>,
+)

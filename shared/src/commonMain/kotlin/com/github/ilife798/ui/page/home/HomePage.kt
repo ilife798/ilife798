@@ -224,6 +224,7 @@ private fun DeviceCard(
                     }
                     DeviceItem(
                         device = device,
+                        alias = viewModel.deviceAlias(device.id),
                         onOpen = { onDeviceClick(device.id) },
                     )
                 }
@@ -235,6 +236,7 @@ private fun DeviceCard(
 @Composable
 private fun DeviceItem(
     device: com.github.ilife798.data.model.Device,
+    alias: String,
     onOpen: () -> Unit,
 ) {
     HeaderRow(
@@ -243,11 +245,18 @@ private fun DeviceItem(
                 .clickable(onClick = onOpen)
                 .padding(vertical = 8.dp),
         icon = { DeviceIcon(dtype = device.dtype, size = 40.dp) },
-        title = device.name.ifEmpty { device.id },
+        title = alias.ifEmpty { device.name.ifEmpty { device.id } },
         titleStyle = MiuixTheme.textStyles.title4,
         trailing = {
             StatusPill(deviceDisplayStatus(device.deviceStatus, device.geneStatus, device.dtype))
         },
-        id = if (device.name.isNotEmpty()) device.id else "",
+        id =
+            if (alias.isNotEmpty()) {
+                device.name.ifEmpty { device.id }
+            } else if (device.name.isNotEmpty()) {
+                device.id
+            } else {
+                ""
+            },
     )
 }
