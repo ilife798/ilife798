@@ -6,11 +6,11 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import kotlinx.serialization.json.Json
 
-private const val RELEASES_API = "https://api.github.com/repos/Jursin/ilife798/releases/latest"
+private const val RELEASES_API = "https://api.github.com/repos/lanyi233/ilife798/releases/latest"
 
 object AppUpdate {
     // 更新移交回退：未找到本平台安装包时打开发布页。
-    const val RELEASES_PAGE_URL = "https://github.com/Jursin/ilife798/releases"
+    const val RELEASES_PAGE_URL = "https://github.com/lanyi233/ilife798/releases"
 
     private val json = Json { ignoreUnknownKeys = true }
 
