@@ -23,6 +23,7 @@ fun HeaderRow(
     titleStyle: TextStyle = MiuixTheme.textStyles.title3,
     id: String = "",
     onIdClick: (() -> Unit)? = null,
+    onTitleClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier =
@@ -42,9 +43,12 @@ fun HeaderRow(
                     text = title,
                     style = titleStyle,
                     color = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
+                    modifier =
+                        Modifier
+                            .weight(1f, fill = false)
+                            .then(if (onTitleClick != null) Modifier.clickable(onClick = onTitleClick) else Modifier),
                 )
-                trailing()
+                Row(modifier = Modifier.padding(start = 4.dp)) { trailing() }
             }
             if (id.isNotEmpty()) {
                 Text(

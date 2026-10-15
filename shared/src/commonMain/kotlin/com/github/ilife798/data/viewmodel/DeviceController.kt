@@ -12,8 +12,14 @@ import com.github.ilife798.data.api.DevStatusResult
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.Device
+import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
+import com.github.ilife798.data.model.DeviceNotes
 import com.github.ilife798.data.model.HomeDeviceType
+import com.github.ilife798.data.model.decodeDeviceAliases
+import com.github.ilife798.data.model.decodeDeviceNotes
+import com.github.ilife798.data.model.encodeDeviceAliases
+import com.github.ilife798.data.model.encodeDeviceNotes
 import com.github.ilife798.logDebug
 import com.github.ilife798.update.requestNotificationPermission
 import com.github.ilife798.util.DeviceLinkParser
@@ -93,6 +99,14 @@ class DeviceController(
         )
     }
 
+    // 设备自定义备注，以设备 ID 为唯一键，仅存本机、不上传
+    var deviceNotes by mutableStateOf(DeviceNotes.EMPTY)
+        private set
+
+    // 设备别名，以设备 ID 为唯一键，仅存本机、不上传；只影响本机显示
+    var deviceAliases by mutableStateOf(DeviceAliases.EMPTY)
+        private set
+
     private fun isCurrentToken(token: String): Boolean {
         val account = getState().account
         return token.isNotEmpty() && (account.token == token || account.appToken == token)
@@ -117,6 +131,129 @@ class DeviceController(
             AppStorage.instance.saveString(StorageKeys.HOME_DEVICE_TYPE, type.name)
         } catch (e: Exception) {
             onLogError("selectHomeDeviceType", e)
+        }
+    }
+
+    fun loadDeviceNotesPref() {
+        try {
+            val saved = AppStorage.instance.getString(StorageKeys.DEVICE_NOTES)
+            deviceNotes = decodeDeviceNotes(saved)
+        } catch (e: Exception) {
+            onLogError("loadDeviceNotesPref", e)
+        }
+    }
+
+    /** 取指定设备的备注，无备注时返回空串。 */
+    fun deviceNote(deviceId: String): String = deviceNotes.textOf(deviceId)
+
+    /**
+     * 写入指定设备的备注。文本归一化后为空即删除该条备注。
+     * 返回 true 表示状态已变更（调用方可用于提示），false 表示无变化或设备 ID 为空。
+     */
+    fun updateDeviceNote(
+        deviceId: String,
+        text: String,
+    ): Boolean {
+        if (deviceId.isEmpty()) return false
+        val updated = deviceNotes.withNote(deviceId, text)
+        if (updated === deviceNotes) return false
+        deviceNotes = updated
+        persistDeviceNotes()
+        return true
+    }
+
+    /** 批量删除备注，用于设备被移除或注销时清理。 */
+    fun dropDeviceNotes(deviceIds: Collection<String>) {
+        val updated = deviceIds.fold(deviceNotes) { acc, id -> acc.withoutNote(id) }
+        if (updated === deviceNotes) return
+        deviceNotes = updated
+        persistDeviceNotes()
+    }
+
+    private fun persistDeviceNotes() {
+        try {
+            AppStorage.instance.saveString(StorageKeys.DEVICE_NOTES, encodeDeviceNotes(deviceNotes))
+        } catch (e: Exception) {
+            onLogError("persistDeviceNotes", e)
+        }
+    }
+
+    fun loadDeviceAliasesPref() {
+        try {
+            val saved = AppStorage.instance.getString(StorageKeys.DEVICE_ALIASES)
+            deviceAliases = decodeDeviceAliases(saved)
+        } catch (e: Exception) {
+            onLogError("loadDeviceAliasesPref", e)
+        }
+    }
+
+    /** 取指定设备的别名，无别名时返回空串。 */
+    fun deviceAlias(deviceId: String): String = deviceAliases.textOf(deviceId)
+
+    /**
+     * 写入指定设备的别名。文本归一化后为空即删除该条别名。
+     * 返回 true 表示状态已变更，false 表示无变化或设备 ID 为空。
+     */
+    fun updateDeviceAlias(
+        deviceId: String,
+        text: String,
+    ): Boolean {
+        if (deviceId.isEmpty()) return false
+        val updated = deviceAliases.withAlias(deviceId, text)
+        if (updated === deviceAliases) return false
+        deviceAliases = updated
+        persistDeviceAliases()
+        return true
+    }
+
+    /** 清空全部备注，返回清掉的条数。 */
+    fun clearAllDeviceNotes(): Int {
+        val count = deviceNotes.entries().size
+        if (count == 0) return 0
+        deviceNotes = DeviceNotes.EMPTY
+        persistDeviceNotes()
+        return count
+    }
+
+    /** 清空全部别名，返回清掉的条数。 */
+    fun clearAllDeviceAliases(): Int {
+        val count = deviceAliases.entries().size
+        if (count == 0) return 0
+        deviceAliases = DeviceAliases.EMPTY
+        persistDeviceAliases()
+        return count
+    }
+
+    /**
+     * 按设备 ID 精确清除选中的备注与别名，返回实际删除的总条数。
+     *
+     * 只删传入 ID 上对应类型的数据，不触碰其他设备或其他类型；两个集合都无变化时
+     * 不落盘，避免无意义的写入。用于「清空设备自定义信息」中按条目勾选删除。
+     */
+    fun clearDeviceCustomInfo(
+        noteDeviceIds: Collection<String>,
+        aliasDeviceIds: Collection<String>,
+    ): Int {
+        val notesDropped = noteDeviceIds.filter { deviceNotes.hasNote(it) }
+        val aliasesDropped = aliasDeviceIds.filter { deviceAliases.hasAlias(it) }
+        if (notesDropped.isEmpty() && aliasesDropped.isEmpty()) return 0
+
+        if (notesDropped.isNotEmpty()) {
+            deviceNotes = notesDropped.fold(deviceNotes) { acc, id -> acc.withoutNote(id) }
+            persistDeviceNotes()
+        }
+        if (aliasesDropped.isNotEmpty()) {
+            deviceAliases = aliasesDropped.fold(deviceAliases) { acc, id -> acc.withoutAlias(id) }
+            persistDeviceAliases()
+        }
+        return notesDropped.size + aliasesDropped.size
+    }
+
+    private fun persistDeviceAliases() {
+        try {
+            AppStorage.instance.saveString(StorageKeys.DEVICE_ALIASES, encodeDeviceAliases(deviceAliases))
+        } catch (e: Exception) {
+            onLogError("persistDeviceAliases", e)
         }
     }
 
