@@ -53,6 +53,7 @@ import top.yukonga.miuix.kmp.shader.isRuntimeShaderSupported
 internal fun SettingsSection(
     viewModel: AppViewModel,
     onLicenseClick: () -> Unit,
+    onBackupClick: () -> Unit,
     wideScreen: Boolean,
 ) {
     val state = viewModel.state
@@ -75,9 +76,10 @@ internal fun SettingsSection(
     var versionTapCount by remember { mutableIntStateOf(0) }
     var lastVersionTapAt by remember { mutableLongStateOf(0L) }
 
-    SmallTitle(text = "外观设置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
+    SmallTitle(text = "应用设置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
+            SmallTitle(text = "外观", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
             OverlayDropdownPreference(
                 title = "主题模式",
                 items = themeOptions,
@@ -162,11 +164,8 @@ internal fun SettingsSection(
                     onCheckedChange = { viewModel.setFloatingNav(it) },
                 )
             }
-        }
-    }
-    SmallTitle(text = "更新设置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column {
+
+            SmallTitle(text = "更新设置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
             ArrowPreference(
                 title = "检查更新",
                 summary = "从 GitHub 检查最新版本",
@@ -188,6 +187,11 @@ internal fun SettingsSection(
     SmallTitle(text = "备份与重置", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
+            ArrowPreference(
+                title = "备份数据",
+                summary = "选择账号与设备自定义信息，导出为备份文件",
+                onClick = onBackupClick,
+            )
             ArrowPreference(
                 title = "清空设备自定义信息",
                 summary = "选择要清空的设备别名与备注，仅影响本机",

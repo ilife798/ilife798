@@ -37,6 +37,7 @@ import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.ui.page.account.AccountPage
+import com.github.ilife798.ui.page.backup.BackupPage
 import com.github.ilife798.ui.page.bill.BillDetailPage
 import com.github.ilife798.ui.page.bill.BillPage
 import com.github.ilife798.ui.page.device.DeviceAddPage
@@ -290,6 +291,7 @@ private fun HomePagerPage(
                 onAccountClick = { navigate(Page.Account) },
                 onBillClick = { navigate(Page.Bill) },
                 onLicenseClick = { navigate(Page.License) },
+                onBackupClick = { navigate(Page.Backup) },
                 bottomPadding = bottomPadding,
                 wideScreen = wideScreen,
             )
@@ -586,6 +588,14 @@ fun MainScaffold(viewModel: AppViewModel) {
             entry<Page.License>(transition = detailTransition) {
                 NavEntry(interceptPredictiveBack, onBack) {
                     LicensePage(
+                        viewModel = viewModel,
+                        onBack = onBack,
+                    )
+                }
+            }
+            entry<Page.Backup>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    BackupPage(
                         viewModel = viewModel,
                         onBack = onBack,
                     )

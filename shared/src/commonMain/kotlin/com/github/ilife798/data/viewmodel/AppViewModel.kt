@@ -20,6 +20,9 @@ import com.github.ilife798.data.model.Account
 import com.github.ilife798.data.model.AccountEntry
 import com.github.ilife798.data.model.AccountInfo
 import com.github.ilife798.data.model.AppState
+import com.github.ilife798.data.model.BackupDocument
+import com.github.ilife798.data.model.BackupGroup
+import com.github.ilife798.data.model.BackupOption
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.DEFAULT_SEED_COLOR
 import com.github.ilife798.data.model.DeviceAliases
@@ -35,6 +38,9 @@ import com.github.ilife798.data.model.ScoreFilter
 import com.github.ilife798.data.model.ScoreRecord
 import com.github.ilife798.data.model.SpendingStats
 import com.github.ilife798.data.model.ThemeMode
+import com.github.ilife798.data.model.displayName
+import com.github.ilife798.data.model.displaySummary
+import com.github.ilife798.data.model.toBackupAccount
 import com.github.ilife798.dismissToast
 import com.github.ilife798.isIOS
 import com.github.ilife798.logDebug
@@ -688,6 +694,88 @@ class AppViewModel : ViewModel() {
         noteDeviceIds: Collection<String>,
         aliasDeviceIds: Collection<String>,
     ): Int = device.clearDeviceCustomInfo(noteDeviceIds, aliasDeviceIds)
+
+    /**
+     * 备份页的分组数据：账号组与设备自定义信息组。
+     *
+     * 账号条目 key 用 `account:<下标>`，因为手机号可能重复或为空；设备条目 key 用
+     * `device:<设备 ID>`，与存储键一致，导出时可直接回查原始值。
+     */
+    fun backupGroups(): List<BackupGroup> {
+        val accounts =
+            state.accountList.mapIndexed { index, entry ->
+                val backup = entry.toBackupAccount()
+                BackupOption(
+                    key = "account:$index",
+                    title = backup.displayName(),
+                    summary = backup.displaySummary(),
+                )
+            }
+        val devices =
+            device.deviceNotes
+                .entries()
+                .map { note ->
+                    val alias = device.deviceAlias(note.deviceId)
+                    BackupOption(
+                        key = "device:${note.deviceId}",
+                        title = alias.ifEmpty { note.deviceId },
+                        summary = "备注：${note.text}",
+                    )
+                } +
+                device.deviceAliases
+                    .entries()
+                    .filter { device.deviceNote(it.deviceId).isEmpty() }
+                    .map { alias ->
+                        BackupOption(
+                            key = "device:${alias.deviceId}",
+                            title = alias.text,
+                            summary = "别名（无备注）",
+                        )
+                    }
+
+        return listOf(
+            BackupGroup(
+                id = "group:accounts",
+                title = "账号",
+                emptyHint = "本机没有已保存的账号",
+                options = accounts,
+            ),
+            BackupGroup(
+                id = "group:devices",
+                title = "设备自定义信息",
+                emptyHint = "本机没有设备别名或备注",
+                options = devices.sortedBy { it.key },
+            ),
+        )
+    }
+
+    /** 按勾选结果生成备份文档。未勾选的条目不会出现在结果里。 */
+    fun buildBackup(
+        groups: List<BackupGroup>,
+        selectedLeafKeys: Set<String>,
+    ): BackupDocument {
+        val accounts =
+            state.accountList.mapIndexedNotNull { index, entry ->
+                if ("account:$index" in selectedLeafKeys) entry.toBackupAccount() else null
+            }
+        // 别名与备注是同一设备上的两项独立数据，key 相同，故分两轮过滤
+        val notes =
+            device.deviceNotes
+                .entries()
+                .filter { "device:${it.deviceId}" in selectedLeafKeys }
+                .associate { it.deviceId to it.text }
+        val aliases =
+            device.deviceAliases
+                .entries()
+                .filter { "device:${it.deviceId}" in selectedLeafKeys }
+                .associate { it.deviceId to it.text }
+        return BackupDocument(
+            createdAt = currentTimeMillis(),
+            accounts = accounts,
+            deviceNotes = notes,
+            deviceAliases = aliases,
+        )
+    }
 
     fun updateAutoDeduct(enabled: Boolean) = device.updateAutoDeduct(enabled)
 

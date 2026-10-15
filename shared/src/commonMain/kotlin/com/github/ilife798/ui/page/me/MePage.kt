@@ -60,6 +60,7 @@ fun MePage(
     onAccountClick: () -> Unit = {},
     onBillClick: () -> Unit = {},
     onLicenseClick: () -> Unit = {},
+    onBackupClick: () -> Unit = {},
     bottomPadding: Dp,
     wideScreen: Boolean,
 ) {
@@ -77,7 +78,7 @@ fun MePage(
             bottomPadding = bottomPadding,
         ) {
             AccountSection(viewModel, onLoginClick, onScoreClick, onAccountClick, onBillClick)
-            SettingsSection(viewModel, onLicenseClick, wideScreen)
+            SettingsSection(viewModel, onLicenseClick, onBackupClick, wideScreen)
             Spacer(modifier = Modifier.height(16.dp))
         }
     }

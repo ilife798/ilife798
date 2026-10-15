@@ -31,4 +31,6 @@ sealed class Page : NavKey {
     ) : Page()
 
     @Serializable data object License : Page()
+
+    @Serializable data object Backup : Page()
 }
