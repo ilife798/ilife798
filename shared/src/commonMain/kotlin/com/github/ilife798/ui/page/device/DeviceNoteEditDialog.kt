@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.data.model.DEVICE_NOTE_MAX_LENGTH
+import com.github.ilife798.data.model.codePointCount
+import com.github.ilife798.data.model.truncateToCodePoints
 import com.github.ilife798.ui.component.ConfirmDialog
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
@@ -51,13 +53,7 @@ fun DeviceNoteEditDialog(
             value = text,
             onValueChange = { input ->
                 // 按码点限长，保证 emoji 不被截断，也不允许超长输入
-                val codePoints = input.codePoints().toArray()
-                text =
-                    if (codePoints.size <= DEVICE_NOTE_MAX_LENGTH) {
-                        input
-                    } else {
-                        String(codePoints, 0, DEVICE_NOTE_MAX_LENGTH)
-                    }
+                text = input.truncateToCodePoints(DEVICE_NOTE_MAX_LENGTH)
             },
             modifier = Modifier.fillMaxWidth(),
             label = "备注名称",
@@ -66,7 +62,7 @@ fun DeviceNoteEditDialog(
         Spacer(Modifier.height(6.dp))
         Column(modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = "留空则清除备注 · ${text.codePoints().toArray().size}/$DEVICE_NOTE_MAX_LENGTH",
+                text = "留空则清除备注 · ${text.codePointCount()}/$DEVICE_NOTE_MAX_LENGTH",
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )

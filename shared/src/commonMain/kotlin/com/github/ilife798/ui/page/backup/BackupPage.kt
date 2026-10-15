@@ -31,7 +31,7 @@ import com.github.ilife798.ui.component.BlurredTopAppBar
 import com.github.ilife798.ui.component.PageScrollColumn
 import com.github.ilife798.ui.theme.rememberAppBlurBackdrop
 import com.github.ilife798.util.BACKUP_MIME_TYPE
-import com.github.ilife798.util.saveTextToFile
+import com.github.ilife798.util.rememberTextFileSaver
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -58,6 +58,9 @@ fun BackupPage(
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val blurBackdrop = rememberAppBlurBackdrop(viewModel.state.appBlur)
+    // 必须在此注册文件选择器：Android 的 ActivityResultRegistry 要求注册发生在
+    // Activity 进入 STARTED 之前，从点击回调里注册会抛 IllegalStateException。
+    val fileSaver = rememberTextFileSaver()
     // 分组数据进入页面时构建一次；数据量很小，不值得做增量更新
     val groups = remember { viewModel.backupGroups() }
     var selection by remember { mutableStateOf(BackupSelection.EMPTY) }
@@ -95,8 +98,10 @@ fun BackupPage(
                 onClick = {
                     val doc = viewModel.buildBackup(groups, selection.selectedLeafKeys(groups))
                     val fileName = "ilife798-backup-${doc.createdAt}.json"
-                    exportedFileName =
-                        if (saveTextToFile(fileName, encodeBackup(doc), BACKUP_MIME_TYPE)) fileName else null
+                    exportedFileName = null
+                    fileSaver.save(fileName, encodeBackup(doc)) { saved ->
+                        exportedFileName = if (saved) fileName else null
+                    }
                 },
                 text = if (selectedCount > 0) "导出备份（$selectedCount）" else "导出备份",
                 enabled = selectedCount > 0,
@@ -105,7 +110,7 @@ fun BackupPage(
 
             exportedFileName?.let { name ->
                 Text(
-                    text = "已导出 $name",
+                    text = "已保存 $name",
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),

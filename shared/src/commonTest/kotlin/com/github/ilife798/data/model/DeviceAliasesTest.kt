@@ -48,7 +48,7 @@ class DeviceAliasesTest {
     fun truncationKeepsSurrogatePairs() {
         val emojis = "🍎".repeat(60)
         val truncated = normalizeDeviceAlias(emojis)
-        assertEquals(DEVICE_ALIAS_MAX_LENGTH, truncated.codePoints().toArray().size)
+        assertEquals(DEVICE_ALIAS_MAX_LENGTH, truncated.codePointCount())
         assertFalse(truncated.last().isHighSurrogate())
         assertTrue(truncated.all { it != '\uFFFD' })
     }

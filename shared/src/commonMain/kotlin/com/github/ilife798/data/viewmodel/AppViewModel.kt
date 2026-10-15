@@ -742,7 +742,7 @@ class AppViewModel : ViewModel() {
             ),
             BackupGroup(
                 id = "group:devices",
-                title = "设备自定义信息",
+                title = "设备",
                 emptyHint = "本机没有设备别名或备注",
                 options = devices.sortedBy { it.key },
             ),

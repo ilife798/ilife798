@@ -16,9 +16,7 @@ const val DEVICE_NOTE_MAX_LENGTH: Int = 50
 fun normalizeDeviceNote(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return ""
-    val codePoints = trimmed.codePoints().toArray()
-    if (codePoints.size <= DEVICE_NOTE_MAX_LENGTH) return trimmed
-    return String(codePoints, 0, DEVICE_NOTE_MAX_LENGTH)
+    return trimmed.truncateToCodePoints(DEVICE_NOTE_MAX_LENGTH)
 }
 
 /**

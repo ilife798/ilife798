@@ -50,7 +50,7 @@ class DeviceNotesTest {
         // 每个 emoji 占 2 个 UTF-16 单元、1 个码点；超长截断后不应留下半个代理对
         val emojis = "🍎".repeat(80)
         val truncated = normalizeDeviceNote(emojis)
-        assertEquals(DEVICE_NOTE_MAX_LENGTH, truncated.codePoints().toArray().size)
+        assertEquals(DEVICE_NOTE_MAX_LENGTH, truncated.codePointCount())
         assertFalse(truncated.last().isHighSurrogate())
         assertTrue(truncated.all { it != '\uFFFD' })
     }

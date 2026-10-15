@@ -1,51 +1,82 @@
 package com.github.ilife798.util
 
 import android.net.Uri
-import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import com.github.ilife798.ActivityHolder
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import com.github.ilife798.ApplicationContext
 import com.github.ilife798.logDebug
 
 /**
  * Android 侧保存文本：走系统「创建文档」界面（SAF），不需要任何存储权限。
  *
- * `rememberLauncherForActivityResult` 只能在 Composable 中注册，而保存动作发生在点击回调
- * 里，因此这里直接向 Activity 注册一次性 launcher 并在回调中写文件。Activity 在配置变更后
- * 会被替换，故每次调用都重新注册，不缓存 launcher。
+ * `rememberLauncherForActivityResult` 在组合期间注册，满足 ActivityResultRegistry
+ * 「必须在 STARTED 之前注册」的约束。若改在点击回调里调用
+ * `Activity.registerForActivityResult`，注册时 Activity 已 RESUMED，会抛
+ * `IllegalStateException: LifecycleOwners must call register before they are STARTED`。
  */
-actual fun saveTextToFile(
-    fileName: String,
-    content: String,
-    mimeType: String,
-): Boolean {
-    val activity = ActivityHolder.current as? ComponentActivity
-    if (activity == null) {
-        logDebug("ILife798", "saveTextToFile: 没有可用的 Activity")
-        return false
-    }
-    return try {
-        val launcher =
-            activity.registerForActivityResult(ActivityResultContracts.CreateDocument(mimeType)) { uri ->
-                uri?.let { writeText(it, content) }
+@Composable
+actual fun rememberTextFileSaver(): TextFileSaver {
+    val pending = remember { PendingTextFile() }
+    val launcher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(BACKUP_MIME_TYPE)) { uri ->
+            pending.finish(uri)
+        }
+    return remember(launcher) {
+        object : TextFileSaver {
+            override fun save(
+                fileName: String,
+                content: String,
+                onFinished: (Boolean) -> Unit,
+            ) {
+                pending.start(content, onFinished)
+                launcher.launch(fileName)
             }
-        launcher.launch(fileName)
-        true
-    } catch (e: Exception) {
-        logDebug("ILife798", "saveTextToFile: ${e.message}")
-        false
+        }
+    }
+}
+
+/** 在「选好目标文件」与「拿到 Uri」之间暂存待写内容与回调。 */
+private class PendingTextFile {
+    private var content: String? = null
+    private var onFinished: ((Boolean) -> Unit)? = null
+
+    fun start(
+        content: String,
+        onFinished: (Boolean) -> Unit,
+    ) {
+        this.content = content
+        this.onFinished = onFinished
+    }
+
+    fun finish(uri: Uri?) {
+        val text = content
+        val callback = onFinished
+        content = null
+        onFinished = null
+        if (uri == null || text == null) {
+            callback?.invoke(false)
+            return
+        }
+        val ok = writeText(uri, text)
+        callback?.invoke(ok)
     }
 }
 
 private fun writeText(
     uri: Uri,
     content: String,
-) {
+): Boolean =
     try {
         ApplicationContext.instance.contentResolver
             .openOutputStream(uri, "wt")
             ?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+        true
     } catch (e: Exception) {
         logDebug("ILife798", "saveTextToFile 写入失败: ${e.message}")
+        false
     }
-}

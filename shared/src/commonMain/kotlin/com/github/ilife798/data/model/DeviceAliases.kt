@@ -13,9 +13,7 @@ const val DEVICE_ALIAS_MAX_LENGTH: Int = 20
 fun normalizeDeviceAlias(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return ""
-    val codePoints = trimmed.codePoints().toArray()
-    if (codePoints.size <= DEVICE_ALIAS_MAX_LENGTH) return trimmed
-    return String(codePoints, 0, DEVICE_ALIAS_MAX_LENGTH)
+    return trimmed.truncateToCodePoints(DEVICE_ALIAS_MAX_LENGTH)
 }
 
 /**

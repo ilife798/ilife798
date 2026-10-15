@@ -35,7 +35,6 @@ data class BackupAccount(
     val token: String = "",
     val appToken: String = "",
     val name: String = "",
-    val img: String = "",
 )
 
 /** 把备份账号还原为运行时账号对象。 */
@@ -56,7 +55,6 @@ fun AccountEntry.toBackupAccount(): BackupAccount =
         token = account.token,
         appToken = account.appToken,
         name = info.name,
-        img = info.img,
     )
 
 /** 账号在备份/恢复界面上展示的名称，回退顺序为昵称、手机号、uid。 */
