@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -60,12 +61,13 @@ fun BackupImportPage(
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val blurBackdrop = rememberAppBlurBackdrop(viewModel.state.appBlur)
-    // 新增条目默认勾上；已是本机数据的默认不勾，避免用户误以为要重复写入
+    // 无冲突的条目默认勾上（新增数据直接导入即可）；有冲突的默认不勾，
+    // 迫使冲突必须被用户看到并逐条裁决，避免默认值静默覆盖本机数据。
     var selection by remember(preview) {
         mutableStateOf(
             preview
                 .allItems()
-                .filter { it.isNew }
+                .filter { !it.isConflict }
                 .fold(ImportSelection.EMPTY) { acc, item -> acc.toggle(item) },
         )
     }
@@ -101,7 +103,10 @@ fun BackupImportPage(
             }
 
             if (preview.aliases.isNotEmpty()) {
-                ImportSection(title = "设备别名") {
+                ImportSection(
+                    title = "设备别名",
+                    conflictCount = preview.aliases.count { it.isConflict },
+                ) {
                     preview.aliases.forEach { item ->
                         ImportConflictRow(
                             item = item,
@@ -115,7 +120,10 @@ fun BackupImportPage(
             }
 
             if (preview.notes.isNotEmpty()) {
-                ImportSection(title = "设备备注") {
+                ImportSection(
+                    title = "设备备注",
+                    conflictCount = preview.notes.count { it.isConflict },
+                ) {
                     preview.notes.forEach { item ->
                         ImportConflictRow(
                             item = item,
@@ -172,9 +180,23 @@ private fun importHint(preview: ImportPreview): String {
 @Composable
 private fun ImportSection(
     title: String,
+    conflictCount: Int = 0,
     content: @Composable () -> Unit,
 ) {
-    SmallTitle(text = title, insideMargin = PaddingValues(4.dp, 8.dp, 4.dp, 0.dp))
+    Row(
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SmallTitle(text = title, insideMargin = PaddingValues(0.dp))
+        if (conflictCount > 0) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "$conflictCount 项可选，本机已有内容",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column { content() }
     }
@@ -236,6 +258,7 @@ private fun ImportConflictRow(
     onToggle: () -> Unit,
     onResolve: (ConflictChoice) -> Unit,
 ) {
+    val conflict = item.isConflict
     Column(
         modifier =
             Modifier
@@ -247,7 +270,12 @@ private fun ImportConflictRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = item.title, style = MiuixTheme.textStyles.body1)
                 Text(
-                    text = if (item.isConflict) "与本机不同，请选择保留哪一份" else "本机没有，将新增",
+                    text =
+                        when {
+                            item.isConflict -> "本机：${item.currentValue}，与备份不同"
+                            item.isIdentical -> "本机：${item.currentValue}，与备份相同"
+                            else -> "本机没有，将新增"
+                        },
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
@@ -258,7 +286,7 @@ private fun ImportConflictRow(
             )
         }
 
-        if (item.isConflict) {
+        if (conflict) {
             Spacer(Modifier.height(6.dp))
             CompareLine(label = "本机", value = item.currentValue, selected = resolution == ConflictChoice.Keep)
             Spacer(Modifier.height(4.dp))
