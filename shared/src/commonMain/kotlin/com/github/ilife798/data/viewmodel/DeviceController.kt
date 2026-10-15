@@ -249,6 +249,36 @@ class DeviceController(
         return notesDropped.size + aliasesDropped.size
     }
 
+    /**
+     * 把导入结果里的设备别名与备注批量写入本机，返回实际变更的条数。
+     *
+     * 只覆盖传入 map 里出现的设备，本机其它设备的别名/备注不受影响——导入是合并而非替换。
+     * 两类数据分别落盘一次，避免逐条写入。
+     */
+    fun applyImportedDeviceInfo(
+        notes: Map<String, String>,
+        aliases: Map<String, String>,
+    ): Int {
+        var changed = 0
+        if (notes.isNotEmpty()) {
+            val updated = notes.entries.fold(deviceNotes) { acc, (id, text) -> acc.withNote(id, text) }
+            if (updated !== deviceNotes) {
+                changed += notes.count { deviceNote(it.key) != it.value }
+                deviceNotes = updated
+                persistDeviceNotes()
+            }
+        }
+        if (aliases.isNotEmpty()) {
+            val updated = aliases.entries.fold(deviceAliases) { acc, (id, text) -> acc.withAlias(id, text) }
+            if (updated !== deviceAliases) {
+                changed += aliases.count { deviceAlias(it.key) != it.value }
+                deviceAliases = updated
+                persistDeviceAliases()
+            }
+        }
+        return changed
+    }
+
     private fun persistDeviceAliases() {
         try {
             AppStorage.instance.saveString(StorageKeys.DEVICE_ALIASES, encodeDeviceAliases(deviceAliases))

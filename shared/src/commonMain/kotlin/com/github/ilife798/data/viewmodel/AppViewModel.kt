@@ -29,6 +29,9 @@ import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
 import com.github.ilife798.data.model.DeviceNotes
 import com.github.ilife798.data.model.HomeDeviceType
+import com.github.ilife798.data.model.ImportApplyOutcome
+import com.github.ilife798.data.model.ImportMergeResult
+import com.github.ilife798.data.model.ImportPreview
 import com.github.ilife798.data.model.MissionInfo
 import com.github.ilife798.data.model.PaletteStyle
 import com.github.ilife798.data.model.PointsInfo
@@ -38,6 +41,9 @@ import com.github.ilife798.data.model.ScoreFilter
 import com.github.ilife798.data.model.ScoreRecord
 import com.github.ilife798.data.model.SpendingStats
 import com.github.ilife798.data.model.ThemeMode
+import com.github.ilife798.data.model.accountForImportKey
+import com.github.ilife798.data.model.buildImportPreview
+import com.github.ilife798.data.model.decodeBackup
 import com.github.ilife798.data.model.displayName
 import com.github.ilife798.data.model.displaySummary
 import com.github.ilife798.data.model.toBackupAccount
@@ -775,6 +781,59 @@ class AppViewModel : ViewModel() {
             deviceNotes = notes,
             deviceAliases = aliases,
         )
+    }
+
+    /**
+     * 解析导入的备份文本并生成本机对照预览。
+     *
+     * 返回 null 表示文本不是合法备份（解析失败或空文件），由调用方提示用户；这与「解析
+     * 成功但没有任何条目」不同，后者会返回一个 [ImportPreview.isEmpty] 为 true 的对象。
+     */
+    fun buildImportPreview(raw: String?): ImportPreview? {
+        val doc = decodeBackup(raw) ?: return null
+        importDocument = doc
+        return buildImportPreview(
+            doc = doc,
+            currentAccounts = state.accountList.map { it.toBackupAccount() },
+            currentNotes = device.deviceNotes.asMap(),
+            currentAliases = device.deviceAliases.asMap(),
+        )
+    }
+
+    /** 最近一次解析成功的备份文档，导入确认时据此还原账号凭据。 */
+    private var importDocument: BackupDocument? = null
+
+    /** 丢弃上次解析的备份，离开导入页时调用，避免长期持有用户的凭据文本。 */
+    fun clearImportDocument() {
+        importDocument = null
+    }
+
+    /**
+     * 应用导入结果。
+     *
+     * 账号按 uid/phone 去重后并入账号列表，已存在的账号保留本机凭据——旧备份覆盖会把用户
+     * 登出，因此账号不做冲突覆盖。设备别名与备注直接写入。返回各类实际写入数量。
+     */
+    fun applyImport(result: ImportMergeResult): ImportApplyOutcome {
+        var accountsAdded = 0
+        if (result.accounts.isNotEmpty()) {
+            val doc = importDocument
+            val list = state.accountList.toMutableList()
+            result.accounts.forEach { item ->
+                val incoming = doc?.accountForImportKey(item.key) ?: return@forEach
+                val exists = list.any { sameAccount(it.account, incoming) }
+                if (!exists && (incoming.uid.isNotEmpty() || incoming.phone.isNotEmpty())) {
+                    list.add(AccountEntry(incoming, AccountInfo()))
+                    accountsAdded++
+                }
+            }
+            if (accountsAdded > 0) {
+                state = state.copy(accountList = list)
+                saveAccount()
+            }
+        }
+        val deviceChanged = device.applyImportedDeviceInfo(result.deviceNotes, result.deviceAliases)
+        return ImportApplyOutcome(accountsAdded = accountsAdded, deviceChanged = deviceChanged)
     }
 
     fun updateAutoDeduct(enabled: Boolean) = device.updateAutoDeduct(enabled)

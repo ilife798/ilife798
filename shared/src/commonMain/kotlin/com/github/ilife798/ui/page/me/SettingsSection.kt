@@ -189,7 +189,7 @@ internal fun SettingsSection(
         Column {
             ArrowPreference(
                 title = "备份数据",
-                summary = "选择账号与设备自定义信息，导出为备份文件",
+                summary = "导出或导入账号与设备自定义信息",
                 onClick = onBackupClick,
             )
             ArrowPreference(

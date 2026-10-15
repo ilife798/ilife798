@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,8 +36,11 @@ import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
+import com.github.ilife798.data.model.ImportPreview
 import com.github.ilife798.data.viewmodel.AppViewModel
+import com.github.ilife798.showToast
 import com.github.ilife798.ui.page.account.AccountPage
+import com.github.ilife798.ui.page.backup.BackupImportPage
 import com.github.ilife798.ui.page.backup.BackupPage
 import com.github.ilife798.ui.page.bill.BillDetailPage
 import com.github.ilife798.ui.page.bill.BillPage
@@ -325,6 +329,15 @@ fun MainScaffold(viewModel: AppViewModel) {
     // 已从添加页压入详情：本次返回（含手势预览）跳过添加页
     val skipDeviceAdd = rememberSaveable { mutableStateOf(false) }
 
+    // 导入预览只在本次会话内有效：含有账号凭据，刻意不随路由参数序列化，也不写盘。
+    // 页面回到此路由时若已丢失（进程被回收），导入页会立即退回。
+    var pendingImport by remember { mutableStateOf<ImportPreview?>(null) }
+    val importToken = remember { mutableStateOf(0L) }
+    val nextImportToken: () -> Long = {
+        importToken.value += 1
+        importToken.value
+    }
+
     val onBack: () -> Unit =
         remember(backStack) {
             {
@@ -598,7 +611,36 @@ fun MainScaffold(viewModel: AppViewModel) {
                     BackupPage(
                         viewModel = viewModel,
                         onBack = onBack,
+                        onImportReady = { preview ->
+                            pendingImport = preview
+                            navigate(Page.BackupImport(token = nextImportToken()))
+                        },
                     )
+                }
+            }
+            entry<Page.BackupImport>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    val preview = pendingImport
+                    if (preview == null) {
+                        // 进程被回收后回到此路由时预览已丢失，直接退回，避免空白页
+                        LaunchedEffect(Unit) { onBack() }
+                    } else {
+                        BackupImportPage(
+                            viewModel = viewModel,
+                            preview = preview,
+                            onBack = onBack,
+                            onFinished = { count ->
+                                viewModel.clearImportDocument()
+                                pendingImport = null
+                                if (count > 0) {
+                                    showToast("已导入 $count 项")
+                                } else {
+                                    showToast("没有可导入的内容")
+                                }
+                                onBack()
+                            },
+                        )
+                    }
                 }
             }
         }

@@ -33,4 +33,13 @@ sealed class Page : NavKey {
     @Serializable data object License : Page()
 
     @Serializable data object Backup : Page()
+
+    /**
+     * 导入备份页。预览数据无法放进路由参数（含账号凭据，且结构较大），因此只带一个
+     * 会话内的令牌，真正的 [com.github.ilife798.data.model.ImportPreview] 由
+     * MainScaffold 在发起导入时暂存。
+     */
+    @Serializable data class BackupImport(
+        val token: Long,
+    ) : Page()
 }

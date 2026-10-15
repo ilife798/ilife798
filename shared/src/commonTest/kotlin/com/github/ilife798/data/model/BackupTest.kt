@@ -154,7 +154,7 @@ class BackupTest {
         val entry =
             AccountEntry(
                 account = Account(phone = "13800000000", uid = "u1", token = "tk", appToken = "at"),
-                info = AccountInfo(name = "甲", img = "http://x/i.png"),
+                info = AccountInfo(name = "甲"),
             )
         val backup = entry.toBackupAccount()
         assertEquals("13800000000", backup.phone)

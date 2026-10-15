@@ -25,12 +25,14 @@ import com.github.ilife798.data.model.BackupGroup
 import com.github.ilife798.data.model.BackupGroupState
 import com.github.ilife798.data.model.BackupOption
 import com.github.ilife798.data.model.BackupSelection
+import com.github.ilife798.data.model.ImportPreview
 import com.github.ilife798.data.model.encodeBackup
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.ui.component.BlurredTopAppBar
 import com.github.ilife798.ui.component.PageScrollColumn
 import com.github.ilife798.ui.theme.rememberAppBlurBackdrop
 import com.github.ilife798.util.BACKUP_MIME_TYPE
+import com.github.ilife798.util.rememberTextFilePicker
 import com.github.ilife798.util.rememberTextFileSaver
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -55,16 +57,19 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun BackupPage(
     viewModel: AppViewModel,
     onBack: () -> Unit,
+    onImportReady: (ImportPreview) -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val blurBackdrop = rememberAppBlurBackdrop(viewModel.state.appBlur)
     // 必须在此注册文件选择器：Android 的 ActivityResultRegistry 要求注册发生在
     // Activity 进入 STARTED 之前，从点击回调里注册会抛 IllegalStateException。
     val fileSaver = rememberTextFileSaver()
+    val filePicker = rememberTextFilePicker()
     // 分组数据进入页面时构建一次；数据量很小，不值得做增量更新
     val groups = remember { viewModel.backupGroups() }
     var selection by remember { mutableStateOf(BackupSelection.EMPTY) }
     var exportedFileName by remember { mutableStateOf<String?>(null) }
+    var importedError by remember { mutableStateOf<String?>(null) }
     val selectedCount = selection.selectedCount(groups)
 
     Scaffold(
@@ -113,6 +118,35 @@ fun BackupPage(
                     text = "已保存 $name",
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            TextButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    importedError = null
+                    filePicker.pick { raw ->
+                        // 取消（null）不提示，避免用户每次点返回都收到一条无意义的错误
+                        if (raw == null) return@pick
+                        val preview = viewModel.buildImportPreview(raw)
+                        when {
+                            preview == null -> importedError = "无法读取该文件，请确认是本应用导出的备份"
+                            preview.isEmpty() -> importedError = "备份文件中没有任何可导入的内容"
+                            else -> onImportReady(preview)
+                        }
+                    }
+                },
+                text = "导入备份",
+            )
+
+            importedError?.let { message ->
+                Text(
+                    text = message,
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                 )
             }
