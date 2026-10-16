@@ -58,6 +58,7 @@ import com.github.ilife798.supportsPredictiveBack
 import com.github.ilife798.toImageBitmap
 import com.github.ilife798.update.UpdateController
 import com.github.ilife798.update.UpdateDialogState
+import com.github.ilife798.util.SPONSOR_URL
 import com.github.ilife798.util.currentTimeMillis
 import com.github.ilife798.util.openSponsorPage
 import kotlinx.coroutines.Dispatchers
@@ -1273,9 +1274,9 @@ class AppViewModel : ViewModel() {
     }
 
     // 立即赞助：打开链接并记录待确认状态
-    fun openSponsor() {
+    fun openSponsor(url: String = SPONSOR_URL) {
         sponsorPromptCount = 0
-        if (openSponsorPage()) {
+        if (openSponsorPage(url)) {
             sponsorPending = true
             sponsorClickedAt = currentTimeMillis()
         }
