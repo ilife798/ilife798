@@ -49,7 +49,9 @@ import com.github.ilife798.ui.page.device.DeviceDetailPage
 import com.github.ilife798.ui.page.device.QrScannerPage
 import com.github.ilife798.ui.page.home.HomePage
 import com.github.ilife798.ui.page.license.LicensePage
+import com.github.ilife798.ui.page.login.LoginMethodPage
 import com.github.ilife798.ui.page.login.LoginPage
+import com.github.ilife798.ui.page.login.TokenLoginPage
 import com.github.ilife798.ui.page.me.MePage
 import com.github.ilife798.ui.page.score.ScorePage
 import com.github.ilife798.ui.page.tasks.TasksPage
@@ -513,6 +515,24 @@ fun MainScaffold(viewModel: AppViewModel) {
                     )
                 }
             }
+            entry<Page.LoginMethod>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    LoginMethodPage(
+                        viewModel = viewModel,
+                        onPhoneLogin = { navigate(Page.Login(switchAccount = true)) },
+                        onCredentialLogin = { navigate(Page.TokenLogin) },
+                        onBack = onBack,
+                    )
+                }
+            }
+            entry<Page.TokenLogin>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    TokenLoginPage(
+                        viewModel = viewModel,
+                        onBack = onBack,
+                    )
+                }
+            }
             entry<Page.Score>(transition = detailTransition) {
                 NavEntry(interceptPredictiveBack, onBack) {
                     ScorePage(
@@ -526,7 +546,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                     AccountPage(
                         viewModel = viewModel,
                         onBack = onBack,
-                        onLoginClick = { isAlipay -> navigate(Page.Login(isAlipay = isAlipay, switchAccount = true)) },
+                        onLoginClick = { navigate(Page.LoginMethod) },
                     )
                 }
             }

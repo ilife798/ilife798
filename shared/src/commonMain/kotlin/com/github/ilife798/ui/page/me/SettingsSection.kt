@@ -227,7 +227,7 @@ internal fun SettingsSection(
             ArrowPreference(
                 title = "查看源代码",
                 summary = "在 GitHub 上查看源代码",
-                onClick = { uriHandler.openUri("https://github.com/Jursin/ilife798") },
+                onClick = { uriHandler.openUri("https://github.com/lanyi233/ilife798") },
             )
             ArrowPreference(
                 title = "开放源代码许可",

@@ -12,6 +12,12 @@ sealed class Page : NavKey {
         val switchAccount: Boolean = false,
     ) : Page()
 
+    /** 登录方式选择页，从账号管理页的「登录其它账号」进入。 */
+    @Serializable data object LoginMethod : Page()
+
+    /** 账户凭证登录页，直接填写设备控制与积分任务的登录信息。 */
+    @Serializable data object TokenLogin : Page()
+
     @Serializable data object Score : Page()
 
     @Serializable data object Account : Page()

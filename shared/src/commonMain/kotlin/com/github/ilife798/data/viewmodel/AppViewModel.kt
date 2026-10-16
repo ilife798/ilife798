@@ -14,6 +14,7 @@ import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.api.ScoreDto
 import com.github.ilife798.data.api.TokenPlatform
+import com.github.ilife798.data.api.TokenProbe
 import com.github.ilife798.data.api.int
 import com.github.ilife798.data.api.str
 import com.github.ilife798.data.model.Account
@@ -500,6 +501,79 @@ class AppViewModel : ViewModel() {
             showToast(notice)
         }
     }
+
+    // 账户凭证登录：按槽位直接填写两条登录信息，设备控制必填、积分任务可选
+    // 与验证码登录的区别是跳过短信流程，改由客户端校验凭据有效性后直接入列
+    fun loginWithCredentials(
+        appToken: String,
+        mainToken: String,
+    ) {
+        val deviceToken = appToken.trim()
+        val pointsToken = mainToken.trim()
+        if (deviceToken.isEmpty()) {
+            showToast("请填写设备控制登录信息")
+            return
+        }
+        viewModelScope.launch {
+            isLoading = true
+            errorMessage = null
+            try {
+                // 设备控制槽位：必须有效
+                val deviceProbe = probeTokenOrNull(deviceToken)
+                if (deviceProbe == null) {
+                    showToast("设备控制登录信息无效，未保存")
+                    return@launch
+                }
+                // 积分任务槽位：填了才校验
+                val pointsProbe = if (pointsToken.isEmpty()) null else probeTokenOrNull(pointsToken)
+                if (pointsToken.isNotEmpty() && pointsProbe == null) {
+                    showToast("积分任务登录信息无效，未保存")
+                    return@launch
+                }
+                // 两条凭据必须属于同一账户，否则会写出一个不存在的混合身份
+                if (deviceProbe != null && pointsProbe != null) {
+                    if (deviceProbe.uid.isEmpty() || pointsProbe.uid.isEmpty()) {
+                        showToast("无法确认两条登录信息属于同一账户，未保存")
+                        return@launch
+                    }
+                    if (deviceProbe.uid != pointsProbe.uid) {
+                        showToast("两条登录信息不属于同一账户，未保存")
+                        return@launch
+                    }
+                }
+                // 填了积分凭据却没拿到账号信息时，uid 只能取设备侧探测结果
+                val uid = deviceProbe.uid.ifEmpty { pointsProbe?.uid ?: "" }
+                clearAccountData()
+                selectAccount(
+                    Account(
+                        isLoggedIn = true,
+                        pointsLoginDone = pointsProbe != null,
+                        uid = uid,
+                        appToken = deviceToken,
+                        token = pointsToken,
+                    ),
+                )
+                saveAccount()
+                reloadAccountData()
+                showToast(if (pointsProbe != null) "登录成功" else "设备控制登录成功，积分任务未填写")
+            } catch (e: Exception) {
+                val msg = "登录失败: ${e.message}"
+                errorMessage = msg
+                showToast(msg)
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    // 探测登录信息，失败或无效统一返回 null，避免调用方重复判空
+    private suspend fun probeTokenOrNull(token: String): TokenProbe? =
+        try {
+            api.probeToken(token).takeIf { it.appValid || it.mainValid }
+        } catch (e: Exception) {
+            logError("probeToken", e)
+            null
+        }
 
     // 验证码
     var captchaKey by mutableStateOf("")
