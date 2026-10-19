@@ -162,7 +162,8 @@ data class PayChannel(
 /**
  * 支付渠道类型，取值与官方 `PaymentType` 枚举的 `value` 一致。
  *
- * 官方白名单共有 6 项；本端已实现其中 4 项（见 [SUPPORTED]），云闪付与农行的 SDK 未公开分发。
+ * 官方白名单共有 6 项；本端实现了其中 4 项（见 [SUPPORTED]）。
+ * 云闪付与农行的 SDK 未公开分发，渠道接口里直接丢弃、界面上不展示。
  */
 object PayChannelType {
     const val ALIPAY_APP = 21
@@ -183,11 +184,14 @@ object PayChannelType {
      * - [WALLET]：商家钱包，纯服务端扣款，成功后刷新余额与账单
      * - [WECHAT_APP]：微信 SDK `PayReq`
      *
-     * 云闪付 [UNIONPAY_APP] 与农行 [BANK_ABC_APP] 的 SDK 未公开分发，服务端即使下发也会被标为不可用。
+     * 微信 [WECHAT_APP] 的实现是完整的，但本端包名与签名没在微信开放平台登记，
+     * 真机拉不起收银台，因此界面上固定画成灰条。
+     *
+     * 云闪付 [UNIONPAY_APP] 与农行 [BANK_ABC_APP] 的 SDK 未公开分发，服务端即使下发也会被丢弃。
      */
     val SUPPORTED = setOf(ALIPAY_APP, THIRD, WALLET, WECHAT_APP)
 
-    /** 名称后缀：渠道可用但第三方未集成好时追加。 */
+    /** 名称后缀：渠道已实现、但第三方资质或环境导致真机拉不起收银台时追加。 */
     const val UNAVAILABLE_SUFFIX = "（第三方不可用）"
 
     /** 该渠道本端能否真正拉起收银台。 */

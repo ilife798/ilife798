@@ -16,6 +16,7 @@ import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.SpendingStats
 import com.github.ilife798.data.model.WalletAccount
 import com.github.ilife798.pay.AlipayPayResult
+import com.github.ilife798.pay.isWeChatPayAvailable
 import com.github.ilife798.pay.payWithAlipay
 import com.github.ilife798.pay.payWithOneCard
 import com.github.ilife798.pay.payWithWeChat
@@ -116,9 +117,10 @@ class WalletBillController(
                 api.createRechargeOrder(token, wallet.eid, wallet.ownerId, product.id)
                     ?: return ""
             // 渠道查询失败不阻断充值：回退到一直可用的支付宝
-            val channels =
+            val raw =
                 api.getPayChannels(token, orderId)
                     ?: listOf(PayChannel(PayChannelType.ALIPAY_APP, "支付宝（APP）"))
+            val channels = markChannelAvailability(raw)
             if (channels.none { !it.unavailable }) return "没有可用的支付方式"
             pendingRecharge =
                 PendingRecharge(
@@ -132,6 +134,31 @@ class WalletBillController(
             "支付失败：${e.message}"
         } finally {
             rechargePaying = false
+        }
+    }
+
+    /**
+     * 标出哪些渠道真机拉得起来。
+     *
+     * 微信先看平台能力（[isWeChatPayAvailable]）：本端 applicationId 与签名没在微信开放平台登记，
+     * 拉不起收银台，恒为 false，因此这里只保留灰条、不再发探测请求。
+     * 探测接口 [com.github.ilife798.data.api.IlifeApi.probeWeChatPay] 留着，等资质补上再用。
+     */
+    private fun markChannelAvailability(channels: List<PayChannel>): List<PayChannel> {
+        if (isWeChatPayAvailable()) return channels
+        return channels.map { channel ->
+            if (channel.type != PayChannelType.WECHAT_APP || channel.unavailable) {
+                return@map channel
+            }
+            channel.copy(
+                unavailable = true,
+                name =
+                    if (channel.name.endsWith(PayChannelType.UNAVAILABLE_SUFFIX)) {
+                        channel.name
+                    } else {
+                        channel.name + PayChannelType.UNAVAILABLE_SUFFIX
+                    },
+            )
         }
     }
 

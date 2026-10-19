@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 // 时间戳毫秒/秒归一阈值（约 1973-03，秒级远小于此值、毫秒级远大于此值）
 private const val MILLIS_THRESHOLD = 100_000_000_000L
@@ -787,7 +788,8 @@ class IlifeApi(
      * 查询某个账单可用的支付渠道（`GET /api/v1/bill/pay/channels?id={billId}`）。
      *
      * 官方在此之后还会用 6 项硬编码白名单过滤一遍，过滤后为空就提示「没有可用的支付方式」。
-     * 本端沿用同样的过滤，但只保留真正集成过 SDK 的渠道，避免用户点到拉不起来的选项。
+     * 本端沿用同样的过滤，且只返回本端实现过的渠道（见 `PayChannelType.SUPPORTED`），
+     * 云闪付/农行这类没有 SDK 的取值直接丢弃，不在界面上留下点不动的条目。
      *
      * 返回 null 表示接口调用失败（网络/服务端错误），返回空列表表示服务端明确没给渠道。
      * 两者触发的原因不同，上层提示文案也不同。
@@ -818,14 +820,9 @@ class IlifeApi(
             }
             // 只保留官方白名单内的取值；白名单外的一律不展示
             .filter { it.type in PayChannelType.OFFICIAL_WHITELIST }
-            // 白名单内但本端拉不起 SDK 的渠道保留展示、标为不可用，由界面灰显
-            .map { item ->
-                val supported = PayChannelType.isSupported(item.type)
-                item.copy(
-                    unavailable = !supported,
-                    name = if (supported) item.name else item.name + PayChannelType.UNAVAILABLE_SUFFIX,
-                )
-            }
+            // 本端没有实现、也不打算实现的渠道（云闪付/农行）直接剔除，界面上不留灰条。
+            // 微信这类「实现过但第三方资质受限」的渠道不在此列，由界面按运行时状态灰显。
+            .filter { PayChannelType.isSupported(it.type) }
     }
 
     /**
@@ -849,6 +846,44 @@ class IlifeApi(
         val body = bodyJson(response)
         if (body.intOrNull("code") != 0) return null
         return body["data"]?.takeUnless { it is JsonNull }
+    }
+
+    /**
+     * 微信支付可用性的服务端探测（`GET /trans/prepay/11?id={billId}`）。
+     *
+     * 当前**未被调用**：本端固定认为微信不可用（包名/签名未登记），直接走灰条。
+     * 等微信开放平台资质补齐、`isWeChatPayAvailable()` 返回 true 后，由渠道预检接上本方法。
+     *
+     * 判定依据：服务端下发的 `data` 是不是带 `prepayid` / `partnerid` 的 JSON 对象。
+     *
+     * - 返回 `true`：服务端给了完整的微信下单信息 → 视为可用；
+     * - 返回 `false`：接口失败、字段缺失或形态不对 → 视为不可用。
+     *
+     * 探测只发 GET、不改变服务端状态（未支付订单由服务端超时回收），失败按不可用处理。
+     */
+    suspend fun probeWeChatPay(
+        token: String,
+        orderId: String,
+    ): Boolean {
+        if (orderId.isEmpty()) return false
+        val data =
+            try {
+                prepay(token, orderId, PayChannelType.WECHAT_APP)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emitApiError("微信支付探测失败：${e.message}")
+                null
+            } ?: return false
+        return looksLikeWeChatPayInfo(data)
+    }
+
+    /** 微信下单信息是 JSON 对象且带 `prepayid` / `partnerid`；字符串等其他形态一律视为不可用。 */
+    internal fun looksLikeWeChatPayInfo(data: JsonElement): Boolean {
+        val obj = data as? JsonObject ?: return false
+
+        fun field(key: String): String = runCatching { obj[key]?.jsonPrimitive?.content }.getOrNull().orEmpty()
+        return field("prepayid").isNotEmpty() && field("partnerid").isNotEmpty()
     }
 
     // 钱包退款：POST /acc/wallet/refund，type=23（支付宝小程序，与官方 RefundActivity 一致）
