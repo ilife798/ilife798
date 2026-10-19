@@ -2,6 +2,6 @@
 BUNDLE_ID = com.github.ilife798.iosApp
 DEPLOYMENT_TARGET = 15.0
 // 与 androidApp versionName/versionCode 保持同步（更新版本时两处一起改）。
-MARKETING_VERSION = 1.3.5
-CURRENT_PROJECT_VERSION = 12
+MARKETING_VERSION = 1.3.6
+CURRENT_PROJECT_VERSION = 13
 DEVELOPMENT_TEAM =
