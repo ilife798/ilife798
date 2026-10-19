@@ -29,6 +29,25 @@ data class SetUseScoreRequest(
     val useScore: Int,
 )
 
+/*
+ * acc/upt 的其余分支：与 setUseScore 共用端点，靠 type 区分操作类型。
+ * 昵称 type 1、校验原密码 type 2、设置密码 type 3（取值来自官方 PasswordSettingActivity）。
+ * 服务端靠 type 分流，其余字段显式传空字符串而非 null，避免被判为空值校验失败。
+ */
+@Serializable
+data class ModifyUserInfoRequest(
+    val name: String? = null,
+    val newPayPwd: String? = null,
+    val oriPayPwd: String? = null,
+    val type: Int,
+)
+
+object ModifyUserInfoType {
+    const val NAME = 1
+    const val ORI_PAY_PWD = 2
+    const val PAY_PWD = 3
+}
+
 @Serializable
 data class MissionExecRequest(
     val adId: String,

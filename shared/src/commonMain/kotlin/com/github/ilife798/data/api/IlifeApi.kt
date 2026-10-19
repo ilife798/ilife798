@@ -295,6 +295,75 @@ class IlifeApi(
         return parseDevResult(response.bodyAsText(), reportError = false, token = token)
     }
 
+    // 修改昵称：acc/upt 的 name 分支，type=1
+    suspend fun modifyName(
+        token: String,
+        name: String,
+        appType: String = APP_TYPE_DEVICE,
+    ): DevResult =
+        submitUserInfo(
+            token = token,
+            body =
+                ModifyUserInfoRequest(
+                    name = name,
+                    newPayPwd = "",
+                    oriPayPwd = "",
+                    type = ModifyUserInfoType.NAME,
+                ),
+            appType = appType,
+        )
+
+    // 交易密码第一步：校验原密码是否通过，type=2
+    suspend fun verifyPayPwd(
+        token: String,
+        oriPayPwd: String,
+        appType: String = APP_TYPE_DEVICE,
+    ): DevResult =
+        submitUserInfo(
+            token = token,
+            body =
+                ModifyUserInfoRequest(
+                    name = "",
+                    newPayPwd = oriPayPwd,
+                    oriPayPwd = oriPayPwd,
+                    type = ModifyUserInfoType.ORI_PAY_PWD,
+                ),
+            appType = appType,
+        )
+
+    // 交易密码第二步：校验通过后写新密码，type=3
+    suspend fun changePayPwd(
+        token: String,
+        oriPayPwd: String,
+        newPayPwd: String,
+        appType: String = APP_TYPE_DEVICE,
+    ): DevResult =
+        submitUserInfo(
+            token = token,
+            body =
+                ModifyUserInfoRequest(
+                    name = "",
+                    newPayPwd = newPayPwd,
+                    oriPayPwd = oriPayPwd,
+                    type = ModifyUserInfoType.PAY_PWD,
+                ),
+            appType = appType,
+        )
+
+    private suspend fun submitUserInfo(
+        token: String,
+        body: ModifyUserInfoRequest,
+        appType: String,
+    ): DevResult {
+        val response =
+            client.apiPost("acc/upt") {
+                contentType(ContentType.Application.Json)
+                setBody(requestJson.encodeToString(body))
+                apiHeaders(token, appType)
+            }
+        return parseDevResult(response.bodyAsText(), reportError = false, token = token)
+    }
+
     // 设备
     suspend fun getMasterDevices(token: String): MasterResult {
         val response =

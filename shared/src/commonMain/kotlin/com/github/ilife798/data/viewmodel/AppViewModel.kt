@@ -516,6 +516,53 @@ class AppViewModel : ViewModel() {
         }
     }
 
+    // 账号管理页：修改昵称，成功后立即刷新本地资料缓存
+    suspend fun modifyAccountName(name: String): DevResult {
+        val input = name.trim()
+        if (input.isEmpty()) return DevResult(false, -1, "昵称不能为空")
+        val token = currentToken()
+        if (token.isEmpty()) return DevResult(false, -99, "登录已过期，请重新登录")
+        return try {
+            val result = api.modifyName(token, input)
+            if (result.success) {
+                state = state.copy(accountInfo = state.accountInfo.copy(name = input))
+                saveAccount()
+                // 让「我的」页与账号列表都取到新昵称，冷却时间不能挡住这次刷新
+                lastAccountLoadTime = 0L
+                loadAccountInfo()
+                showToast("修改昵称成功")
+            }
+            result
+        } catch (e: Exception) {
+            logError("modifyAccountName", e)
+            DevResult(false, -1, "网络异常，请稍后再试")
+        }
+    }
+
+    // 账号管理页：修改交易密码。官方分两步，先校验原密码再写新密码
+    suspend fun changePayPassword(
+        oriPayPwd: String,
+        newPayPwd: String,
+    ): DevResult {
+        val ori = oriPayPwd.trim()
+        val next = newPayPwd.trim()
+        if (ori.isEmpty()) return DevResult(false, -1, "原密码不能为空")
+        if (next.isEmpty()) return DevResult(false, -1, "新密码不能为空")
+        if (ori == next) return DevResult(false, -1, "新密码不能与原密码相同")
+        val token = currentToken()
+        if (token.isEmpty()) return DevResult(false, -99, "登录已过期，请重新登录")
+        return try {
+            val verify = api.verifyPayPwd(token, ori)
+            if (!verify.success) return verify.copy(message = verify.message.ifEmpty { "原密码不正确" })
+            val result = api.changePayPwd(token, ori, next)
+            if (result.success) showToast("交易密码修改成功")
+            result
+        } catch (e: Exception) {
+            logError("changePayPassword", e)
+            DevResult(false, -1, "网络异常，请稍后再试")
+        }
+    }
+
     // 账户凭证登录：按槽位直接填写两条登录信息，设备控制必填、积分任务可选
     // 与验证码登录的区别是跳过短信流程，改由客户端校验凭据有效性后直接入列
     fun loginWithCredentials(
