@@ -32,9 +32,11 @@ import com.github.ilife798.copyToClipboard
 import com.github.ilife798.data.model.DeviceOption
 import com.github.ilife798.data.model.DeviceSubState
 import com.github.ilife798.data.model.deviceDisplayStatus
+import com.github.ilife798.data.viewmodel.AccountAssets
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.data.viewmodel.buildDeviceDetailStartArgs
 import com.github.ilife798.showToast
+import com.github.ilife798.ui.component.AccountAvatar
 import com.github.ilife798.ui.component.BlurredTopAppBar
 import com.github.ilife798.ui.component.ConfirmDialog
 import com.github.ilife798.ui.component.DeviceIcon
@@ -193,6 +195,11 @@ fun DeviceDetailPage(
         if (state.account.hasAnyToken) viewModel.loadDeviceDetail(deviceId)
     }
 
+    // 进入详情页刷新一次所有账号的头像、昵称、余额与积分，保证账号卡展示的是最新值
+    LaunchedEffect(deviceId) {
+        viewModel.refreshAllAccountInfo()
+    }
+
     val resolvedName =
         liveDevice?.name?.takeIf { it.isNotEmpty() }
             ?: detail?.name?.takeIf { it.isNotEmpty() }
@@ -219,6 +226,7 @@ fun DeviceDetailPage(
     var showTileConfirm by remember(deviceId) { mutableStateOf(false) }
     var showNoteEdit by remember(deviceId) { mutableStateOf(false) }
     var showAliasEdit by remember(deviceId) { mutableStateOf(false) }
+    var showAccountPicker by remember(deviceId) { mutableStateOf(false) }
 
     val followed = state.devices.any { it.id == deviceId }
 
@@ -440,6 +448,12 @@ fun DeviceDetailPage(
             )
 
             if (isLoggedIn) {
+                DeviceAccountCard(
+                    viewModel = viewModel,
+                    deviceId = deviceId,
+                    geneStatus = geneStatus,
+                    onPick = { showAccountPicker = true },
+                )
                 Card(modifier = Modifier.fillMaxWidth()) {
                     SwitchPreference(
                         title = "开启积分自动抵扣",
@@ -501,6 +515,15 @@ fun DeviceDetailPage(
                 viewModel.toggleDeviceRunning(deviceId)
             },
             onDismiss = { showSettleConfirm = false },
+        )
+    }
+
+    if (showAccountPicker) {
+        AccountPickerDialog(
+            viewModel = viewModel,
+            deviceId = deviceId,
+            appBlur = state.appBlur,
+            onDismiss = { showAccountPicker = false },
         )
     }
 
@@ -671,6 +694,125 @@ private fun ChannelCard(
                     enabled = available,
                 )
             }
+        }
+    }
+}
+
+// 设备详情页的账号卡：一行显示本次操作使用的账号及其余额/积分，点击进入选择弹窗。
+// 设备运行中锁定为只读，避免操作途中换账号导致结算对象错乱。
+@Composable
+private fun DeviceAccountCard(
+    viewModel: AppViewModel,
+    deviceId: String,
+    geneStatus: Int,
+    onPick: () -> Unit,
+) {
+    val state = viewModel.state
+    val locked = geneStatus != 99
+    val picked = viewModel.deviceAccountPick(deviceId)
+    val index = picked.takeIf { it in state.accountList.indices } ?: state.currentAccountIndex
+    val entry = state.accountList.getOrNull(index)
+    val info = if (index == state.currentAccountIndex) state.accountInfo else entry?.info
+    val name =
+        info
+            ?.name
+            ?.ifEmpty { entry?.account?.phone.orEmpty() }
+            .orEmpty()
+            .ifEmpty { "未登录" }
+
+    // 非当前账号的资产需按需拉取，进入页面或切换账号后触发一次
+    LaunchedEffect(index, viewModel.state.currentAccountIndex) {
+        if (index >= 0) viewModel.loadAccountAssets(index)
+    }
+    val assets = if (index >= 0) viewModel.accountAssetsOf(index) else AccountAssets()
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            SectionHeader("账号")
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !locked, onClick = onPick)
+                        .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AccountAvatar(info?.img.orEmpty(), 40.dp)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = name, style = MiuixTheme.textStyles.body1)
+                    // 余额为现金总额，积分按 1000:1 折算人民币，与积分兑换页口径一致
+                    val balanceText = assets.balance?.let { "¥${formatMoney(it)}" } ?: "--"
+                    val pointsText = assets.points?.toString() ?: "--"
+                    val worthText = assets.points?.let { "¥${formatMoney(it / 1000.0)}" } ?: "--"
+                    Text(
+                        text = "余额: $balanceText, 积分: $pointsText ≈ $worthText",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+                if (!locked) {
+                    Text(
+                        text = "切换",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// 账号选择弹窗：仅列出具备设备控制 token 的账号。
+@Composable
+private fun AccountPickerDialog(
+    viewModel: AppViewModel,
+    deviceId: String,
+    appBlur: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val state = viewModel.state
+    val candidates =
+        state.accountList
+            .indices
+            .filter { viewModel.canControlDevice(it) }
+    val initial =
+        viewModel.deviceAccountPick(deviceId).takeIf { it in candidates }
+            ?: state.currentAccountIndex.takeIf { it in candidates }
+            ?: candidates.firstOrNull()
+            ?: -1
+    var selected by remember(deviceId) { mutableStateOf(initial) }
+
+    // 弹窗内的账号资产需保证已加载，逐个补齐（当前账号由全局状态维护，内部会跳过）
+    LaunchedEffect(Unit) {
+        candidates.forEach { viewModel.loadAccountAssets(it) }
+    }
+
+    ConfirmDialog(
+        title = "选择账号",
+        appBlur = appBlur,
+        confirmEnabled = selected >= 0,
+        onConfirm = {
+            viewModel.setDeviceAccountPick(deviceId, selected)
+            onDismiss()
+        },
+        onDismiss = onDismiss,
+    ) {
+        candidates.forEach { index ->
+            val entry = state.accountList[index]
+            val info = if (index == state.currentAccountIndex) state.accountInfo else entry.info
+            val assets = viewModel.accountAssetsOf(index)
+            val balanceText = assets.balance?.let { "¥${formatMoney(it)}" } ?: "--"
+            val pointsText = assets.points?.toString() ?: "--"
+            val worthText = assets.points?.let { "¥${formatMoney(it / 1000.0)}" } ?: "--"
+            RadioButtonPreference(
+                title = info.name.ifEmpty { entry.account.phone }.ifEmpty { "-" },
+                summary = "余额: $balanceText, 积分: $pointsText ≈ $worthText",
+                selected = selected == index,
+                onClick = { selected = index },
+                radioButtonLocation = RadioButtonLocation.End,
+                startAction = { AccountAvatar(info.img, 40.dp) },
+            )
         }
     }
 }

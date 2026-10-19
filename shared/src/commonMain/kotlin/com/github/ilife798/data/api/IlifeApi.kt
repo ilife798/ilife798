@@ -415,6 +415,7 @@ class IlifeApi(
         token: String,
         did: String,
         appType: String = APP_TYPE_DEVICE,
+        reportError: Boolean = true,
     ): DevResult {
         val response =
             client.apiGet("dev/end") {
@@ -422,7 +423,7 @@ class IlifeApi(
                 parameter("rcp", "false")
                 apiHeaders(token, appType)
             }
-        return parseDevResult(response.bodyAsText(), token = token)
+        return parseDevResult(response.bodyAsText(), reportError = reportError, token = token)
     }
 
     suspend fun devFavo(

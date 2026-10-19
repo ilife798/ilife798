@@ -200,6 +200,29 @@ class AppViewModel : ViewModel() {
             delay(1500.milliseconds)
             if (update.checkUpdateOnStart) update.checkForUpdate(silent = true)
         }
+        // 启动后补齐所有已保存账号的资料与资产，避免切到别的账号才现拉
+        refreshAllAccountProfiles()
+    }
+
+    // 拉取除当前账号外所有账号的头像、昵称、余额与积分，结果只更新内存中的账号列表
+    fun refreshAllAccountProfiles() {
+        device.preloadAccountProfiles { index, info ->
+            val list = state.accountList
+            if (index !in list.indices) return@preloadAccountProfiles
+            val merged = list.toMutableList()
+            merged[index] = merged[index].copy(info = info)
+            state = state.copy(accountList = merged)
+            // 列表变动需落盘，否则下次启动又回到旧资料
+            saveAccountQuietly(merged)
+        }
+    }
+
+    private fun saveAccountQuietly(list: List<AccountEntry>) {
+        try {
+            AppStorage.instance.saveString(StorageKeys.ACCOUNT_LIST, accountListJson.encodeToString(list))
+        } catch (e: Exception) {
+            logError("saveAccountQuietly", e)
+        }
     }
 
     private fun loadSettings() {
@@ -998,6 +1021,23 @@ class AppViewModel : ViewModel() {
     ) = device.toggleDeviceRunning(deviceId, args, forceStop)
 
     fun stopDevice(deviceId: String) = device.stopDevice(deviceId)
+
+    // 设备详情页的临时账号选择，仅影响本机设备操作，不改全局登录态
+    fun deviceAccountPick(deviceId: String): Int = device.deviceAccountPick(deviceId)
+
+    fun setDeviceAccountPick(
+        deviceId: String,
+        index: Int,
+    ) = device.setDeviceAccountPick(deviceId, index)
+
+    fun canControlDevice(index: Int): Boolean = device.canControlDevice(index)
+
+    fun accountAssetsOf(index: Int): AccountAssets = device.accountAssetsOf(index)
+
+    // 刷新全部已保存账号的资料与资产，进入应用与进入设备详情页时各调一次
+    fun refreshAllAccountInfo() = refreshAllAccountProfiles()
+
+    fun loadAccountAssets(index: Int) = device.loadAccountAssets(index)
 
     fun loadAccountInfo(): Job? {
         val token = currentToken()

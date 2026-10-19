@@ -1,6 +1,7 @@
 package com.github.ilife798.data.viewmodel
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.AppStorage
@@ -10,6 +11,7 @@ import com.github.ilife798.data.api.APP_TYPE_DEVICE
 import com.github.ilife798.data.api.APP_TYPE_POINTS
 import com.github.ilife798.data.api.DevStatusResult
 import com.github.ilife798.data.api.IlifeApi
+import com.github.ilife798.data.model.AccountInfo
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.Device
 import com.github.ilife798.data.model.DeviceAliases
@@ -38,6 +40,14 @@ private const val PAY_TYPE_ALIPAY = 21
 
 // 运行中设备的状态轮询间隔（秒），用于感知机器端手动停止
 private const val DEVICE_MONITOR_INTERVAL_SECONDS = 5L
+
+// 账号的资产快照：余额与积分，仅用于详情页账号卡展示。
+// 两者都可能尚未加载，用 null 表示未知，UI 显示为「--」。
+data class AccountAssets(
+    val balance: Double? = null,
+    val points: Int? = null,
+    val loaded: Boolean = false,
+)
 
 // 设备列表、启停与扫码解析。
 class DeviceController(
@@ -83,6 +93,125 @@ class DeviceController(
     private var deviceMonitorJob: Job? = null
     private var lastDeviceLoadTime = 0L
 
+    // 设备详情页的临时账号选择：设备 ID -> 账号列表下标。
+    // 只影响本机的设备操作，不改动全局登录态（account/currentAccountIndex），仅存内存不落盘。
+    private val deviceAccountPicks = mutableStateMapOf<String, Int>()
+
+    // 临时选中的账号下标；未选中时返回 -1，表示跟随当前账号
+    fun deviceAccountPick(deviceId: String): Int = deviceAccountPicks[deviceId] ?: -1
+
+    // 设定/清除临时账号选择。index 越界或等于当前账号时视为取消临时选择
+    fun setDeviceAccountPick(
+        deviceId: String,
+        index: Int,
+    ) {
+        if (index < 0 || index == getState().currentAccountIndex) {
+            deviceAccountPicks.remove(deviceId)
+        } else {
+            deviceAccountPicks[deviceId] = index
+        }
+    }
+
+    // 账号列表下标对应的设备控制凭据；下标非法或该账号无设备控制 token 时返回 null
+    private fun deviceAuthOf(index: Int): DeviceAuth? {
+        val list = getState().accountList
+        if (index !in list.indices) return null
+        val account = list[index].account
+        return when {
+            account.appToken.isNotEmpty() -> DeviceAuth(account.appToken, APP_TYPE_DEVICE)
+            account.token.isNotEmpty() -> DeviceAuth(account.token, APP_TYPE_POINTS)
+            else -> null
+        }
+    }
+
+    // 该账号能否用于设备控制（具备任一可用 token）
+    fun canControlDevice(index: Int): Boolean = deviceAuthOf(index) != null
+
+    // 非当前账号的资产快照（余额/积分），按账号下标缓存，仅存内存。
+    // 当前账号直接用 state.wallets / state.points，无需缓存。
+    private val accountAssets = mutableStateMapOf<Int, AccountAssets>()
+
+    // 某账号用于展示的余额与积分；当前账号走全局状态，其余账号读缓存
+    fun accountAssetsOf(index: Int): AccountAssets {
+        val cached = accountAssets[index]
+        if (index == getState().currentAccountIndex) {
+            // 全局状态尚未加载完成时退回缓存，避免启动瞬间闪一下 --
+            val state = getState()
+            val active = state.wallets.firstOrNull { it.id == state.activeWalletId } ?: state.wallets.firstOrNull()
+            val balance = active?.total ?: cached?.balance
+            val loadedPoints = state.points.available ?: 0
+            val points = loadedPoints.takeIf { it > 0 } ?: cached?.points
+            return AccountAssets(balance = balance, points = points, loaded = cached?.loaded == true)
+        }
+        return cached ?: AccountAssets()
+    }
+
+    // 拉取非当前账号的余额与积分，供账号卡展示；当前账号已由全局状态维护，直接跳过
+    fun loadAccountAssets(index: Int) {
+        if (index == getState().currentAccountIndex) return
+        refreshAccountAssets(index)
+    }
+
+    // 无视是否为当前账号，强制拉一次余额与积分。
+    // 当前账号的结果只写内存缓存，不回写全局状态，避免与正常加载流程互相覆盖。
+    fun refreshAccountAssets(index: Int) {
+        val auth = deviceAuthOf(index) ?: return
+        scope.launch {
+            try {
+                val wallet = api.getWalletOwner(auth.token)
+                val mission = api.getMissionList(auth.token)
+                // 账号列表可能已变（切号/删除），下标失效则丢弃结果
+                val latest = deviceAuthOf(index)
+                val stillValid = latest != null && latest.token == auth.token && latest.appType == auth.appType
+                if (!stillValid) return@launch
+                val active =
+                    wallet.active?.takeIf { it.total != 0.0 }
+                        ?: wallet.wallets.firstOrNull { it.auth || it.total != 0.0 }
+                        ?: wallet.wallets.firstOrNull()
+                accountAssets[index] =
+                    AccountAssets(
+                        balance = active?.total,
+                        points = mission.validScore,
+                        loaded = true,
+                    )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onLogError("refreshAccountAssets", e)
+            }
+        }
+    }
+
+    // 刷新所有已保存账号的资料与资产（含当前账号）。
+    // 每个账号独立协程并发拉取，任一失败不影响其余账号；资料为空时保留旧值，避免掉成空白。
+    fun preloadAccountProfiles(onProfile: (Int, AccountInfo) -> Unit) {
+        getState().accountList.forEachIndexed { index, entry ->
+            val auth = deviceAuthOf(index) ?: return@forEachIndexed
+            scope.launch {
+                try {
+                    val info = api.getAccountInfo(auth.token, notifyExpiry = false, appType = auth.appType)
+                    val latest = deviceAuthOf(index)
+                    val stillValid = latest != null && latest.token == auth.token && latest.appType == auth.appType
+                    if (stillValid && info != null) {
+                        onProfile(
+                            index,
+                            AccountInfo(
+                                img = info.img.ifEmpty { entry.info.img },
+                                name = info.name.ifEmpty { entry.info.name },
+                                pn = info.pn.ifEmpty { entry.info.pn },
+                            ),
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    onLogError("preloadAccountProfiles", e)
+                }
+                refreshAccountAssets(index)
+            }
+        }
+    }
+
     private fun currentToken(): String = getState().account.preferredToken
 
     // 设备控制鉴权：优先 appToken（设备通道），缺失时回退积分 token
@@ -108,8 +237,12 @@ class DeviceController(
         private set
 
     private fun isCurrentToken(token: String): Boolean {
+        if (token.isEmpty()) return false
         val account = getState().account
-        return token.isNotEmpty() && (account.token == token || account.appToken == token)
+        if (account.token == token || account.appToken == token) return true
+        // 详情页临时选了其它账号时，该账号的 token 也算有效，否则结果会被当作过期丢弃
+        val picked = deviceAccountPicks.values.mapNotNullTo(mutableSetOf()) { deviceAuthOf(it)?.token }
+        return token in picked
     }
 
     fun loadHomeDeviceTypePref() {
@@ -324,6 +457,8 @@ class DeviceController(
         deviceDetail = null
         detailDeviceId = null
         lastDeviceLoadTime = 0L
+        deviceAccountPicks.clear()
+        accountAssets.clear()
     }
 
     fun loadDeviceInfo(force: Boolean = false): Job? {
@@ -553,8 +688,12 @@ class DeviceController(
         args: String = "",
         forceStop: Boolean = false,
     ) {
-        val auth = deviceAuth()
+        // 详情页临时选了账号就用该账号，否则沿用全局当前账号
+        val picked = deviceAuthOf(deviceAccountPick(deviceId))
+        val auth = picked ?: deviceAuth()
         if (auth.token.isEmpty()) return
+        // 仅供停止时回退的备选账号（临时账号失败才试当前账号）
+        val fallback = deviceAuth().takeIf { selected -> selected.token.isNotEmpty() && selected.token != auth.token }
         val deviceName =
             getState()
                 .devices
@@ -568,6 +707,7 @@ class DeviceController(
                 val currentStatus = if (forceStop) null else api.getDevStatus(auth.token, deviceId, auth.appType)
                 val starting = !forceStop && currentStatus?.geneStatus == 99
                 if (starting) startingDeviceId = deviceId
+                var usedAuth = auth
                 val result =
                     if (starting) {
                         requestNotificationPermission()
@@ -589,9 +729,40 @@ class DeviceController(
                             api.devStart(auth.token, deviceId, auth.appType, ptype = PAY_TYPE_ALIPAY, args = args)
                         }
                     } else {
-                        api.devEnd(auth.token, deviceId, auth.appType)
+                        // 停止：先用选中的账号静默尝试，失败再换当前账号，两跳都不弹错，只在最终失败时报错
+                        val first = api.devEnd(auth.token, deviceId, auth.appType, reportError = false)
+                        if (first.success || fallback == null) {
+                            first
+                        } else {
+                            val second = api.devEnd(fallback.token, deviceId, fallback.appType, reportError = false)
+                            if (second.success) {
+                                usedAuth = fallback
+                                second
+                            } else {
+                                onToast(first.message.ifEmpty { second.message })
+                                first
+                            }
+                        }
                     }
                 if (!result.success) return@launch
+                // 回退到别的账号才提示，避免用户以为选中的账号生效了
+                if (usedAuth.token != auth.token) {
+                    val name =
+                        getState()
+                            .accountList
+                            .getOrNull(deviceAccountPick(deviceId))
+                            ?.info
+                            ?.name
+                            ?.ifEmpty {
+                                getState()
+                                    .accountList
+                                    .getOrNull(deviceAccountPick(deviceId))
+                                    ?.account
+                                    ?.phone
+                                    .orEmpty()
+                            }.orEmpty()
+                    onToast("已使用账号${name.ifEmpty { "备用" }}停止设备")
+                }
                 syncRunning(deviceId, deviceName, starting)
                 // 轮询至 geneStatus 变化：第一轮 5×2.5s 快查，未变再第二轮 25×5s 慢查
                 var newStatus: DevStatusResult? = null
@@ -600,15 +771,15 @@ class DeviceController(
                 while (remaining > 0) {
                     remaining--
                     delay(stepMs.milliseconds)
-                    if (!isCurrentToken(auth.token)) return@launch
-                    newStatus = api.getDevStatus(auth.token, deviceId, auth.appType)
+                    if (!isCurrentToken(usedAuth.token)) return@launch
+                    newStatus = api.getDevStatus(usedAuth.token, deviceId, usedAuth.appType)
                     if (newStatus?.geneStatus != currentStatus?.geneStatus) break
                     if (remaining == 0 && stepMs == 2500L) {
                         stepMs = 5000L
                         remaining = 25
                     }
                 }
-                if (!isCurrentToken(auth.token)) return@launch
+                if (!isCurrentToken(usedAuth.token)) return@launch
                 setState { state ->
                     state.copy(
                         devices =

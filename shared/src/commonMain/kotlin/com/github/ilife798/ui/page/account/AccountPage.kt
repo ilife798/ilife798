@@ -31,6 +31,7 @@ import com.github.ilife798.copyToClipboard
 import com.github.ilife798.data.model.Account
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.showToast
+import com.github.ilife798.ui.component.AccountAvatar
 import com.github.ilife798.ui.component.BlurredTopAppBar
 import com.github.ilife798.ui.component.ConfirmDialog
 import com.github.ilife798.ui.component.PageScrollColumn
@@ -300,37 +301,4 @@ private enum class ProfileEdit(
 ) {
     Name("修改昵称"),
     PayPassword("修改交易密码"),
-}
-
-@Composable
-private fun AccountAvatar(
-    img: String,
-    size: Dp,
-) {
-    if (img.isNotEmpty()) {
-        AsyncImage(
-            model = img,
-            contentDescription = null,
-            modifier =
-                Modifier
-                    .size(size)
-                    .clip(CircleShape),
-            contentScale = ContentScale.Crop,
-        )
-    } else {
-        Box(
-            modifier =
-                Modifier
-                    .size(size)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = MiuixIcons.Contacts,
-                contentDescription = null,
-                tint = MiuixTheme.colorScheme.onSurface,
-            )
-        }
-    }
 }
