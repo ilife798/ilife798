@@ -57,7 +57,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun MePage(
     viewModel: AppViewModel,
-    onLoginClick: (isAlipay: Boolean) -> Unit = {},
+    onLoginClick: () -> Unit = {},
     onScoreClick: () -> Unit = {},
     onAccountClick: () -> Unit = {},
     onBillClick: () -> Unit = {},
@@ -90,7 +90,7 @@ fun MePage(
 @Composable
 private fun AccountSection(
     viewModel: AppViewModel,
-    onLoginClick: (isAlipay: Boolean) -> Unit,
+    onLoginClick: () -> Unit,
     onScoreClick: () -> Unit,
     onAccountClick: () -> Unit,
     onBillClick: () -> Unit,
@@ -199,7 +199,7 @@ private fun AccountSection(
                     minHeight = 35.dp,
                     minWidth = 35.dp,
                     backgroundColor = MiuixTheme.colorScheme.secondaryContainer.copy(alpha = 0.8f),
-                    onClick = { onLoginClick(false) },
+                    onClick = { onLoginClick() },
                 ) {
                     Icon(
                         imageVector = MiuixIcons.Import,

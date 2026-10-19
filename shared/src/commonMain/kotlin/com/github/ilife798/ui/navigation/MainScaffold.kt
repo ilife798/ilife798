@@ -293,7 +293,7 @@ private fun HomePagerPage(
         2 -> {
             MePage(
                 viewModel = viewModel,
-                onLoginClick = { isAlipay -> navigate(Page.Login(isAlipay = isAlipay)) },
+                onLoginClick = { navigate(Page.LoginMethod) },
                 onScoreClick = { navigate(Page.Score) },
                 onAccountClick = { navigate(Page.Account) },
                 onBillClick = { navigate(Page.Bill) },
