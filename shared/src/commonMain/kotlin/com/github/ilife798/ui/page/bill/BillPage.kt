@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.data.model.BillRecord
+import com.github.ilife798.data.model.PendingRecharge
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.WalletAccount
@@ -65,6 +66,7 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.BankCards
 import top.yukonga.miuix.kmp.icon.extended.More
+import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.menu.OverlayDropdownMenu
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -217,8 +219,9 @@ fun BillPage(
                                             .firstOrNull { it.id == selectedProductId }
                                     if (product != null) {
                                         scope.launch {
-                                            val result = viewModel.submitRecharge(product)
-                                            if (result.message.isNotEmpty()) showToast(result.message)
+                                            // 第一步只下单并查渠道，成功后由 pendingRecharge 弹出选择框
+                                            val error = viewModel.startRecharge(product)
+                                            if (!error.isNullOrEmpty()) showToast(error)
                                         }
                                     }
                                 },
@@ -258,6 +261,81 @@ fun BillPage(
                 }
             },
         )
+    }
+
+    // 下单成功后弹出支付方式选择框，选定渠道才真正唤起收银台
+    viewModel.pendingRecharge?.let { pending ->
+        PayMethodPickerDialog(
+            pending = pending,
+            appBlur = state.appBlur,
+            paying = viewModel.rechargePaying,
+            onDismiss = { viewModel.dismissRecharge() },
+            onPick = { payType ->
+                scope.launch {
+                    val result = viewModel.payRecharge(payType)
+                    if (result.message.isNotEmpty()) showToast(result.message)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PayMethodPickerDialog(
+    pending: PendingRecharge,
+    appBlur: Boolean,
+    paying: Boolean,
+    onDismiss: () -> Unit,
+    onPick: (Int) -> Unit,
+) {
+    var selectedType by remember(pending.orderId) {
+        mutableStateOf(pending.channels.firstOrNull()?.type ?: 0)
+    }
+    ConfirmDialog(
+        title = "选择支付方式",
+        appBlur = appBlur,
+        confirmText = if (paying) "支付中…" else "确认支付",
+        cancelEnabled = !paying,
+        confirmEnabled = !paying && selectedType != 0,
+        onConfirm = { if (selectedType != 0) onPick(selectedType) },
+        onDismiss = onDismiss,
+    ) {
+        Text(
+            text = "应付 ¥${formatMoney(pending.amount)}",
+            style = MiuixTheme.textStyles.title3,
+            color = MiuixTheme.colorScheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        // 渠道数量少，直接纵向排列，选中项用主色描边标示
+        pending.channels.forEach { channel ->
+            val selected = channel.type == selectedType
+            Card(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                onClick = { if (!paying) selectedType = channel.type },
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = channel.name,
+                        style = MiuixTheme.textStyles.body1,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (selected) {
+                        Icon(
+                            imageVector = MiuixIcons.Ok,
+                            contentDescription = "已选择",
+                            tint = MiuixTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

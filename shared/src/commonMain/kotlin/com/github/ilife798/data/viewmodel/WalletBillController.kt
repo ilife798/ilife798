@@ -8,6 +8,9 @@ import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.BillRecord
+import com.github.ilife798.data.model.PayChannel
+import com.github.ilife798.data.model.PayChannelType
+import com.github.ilife798.data.model.PendingRecharge
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.SpendingStats
@@ -63,6 +66,15 @@ class WalletBillController(
     var rechargePaying by mutableStateOf(false)
         private set
 
+    /**
+     * 待支付订单。
+     *
+     * 渠道查询必须带账单 ID，所以流程拆成两步：先下单拿到 [PendingRecharge]，
+     * 把渠道列表展示给用户选择，选定后再用它去拉预支付串。
+     */
+    var pendingRecharge by mutableStateOf<PendingRecharge?>(null)
+        private set
+
     var refundSubmitting by mutableStateOf(false)
         private set
 
@@ -82,6 +94,70 @@ class WalletBillController(
     private var lastSpendingLoadTime = 0L
 
     private fun currentToken(): String = getState().account.preferredToken
+
+    /**
+     * 第一步：下单并查可用渠道。
+     *
+     * 成功则把订单与渠道放进 [pendingRecharge] 供界面弹出选择框；失败返回错误文案。
+     */
+    suspend fun startRecharge(product: RechargeProduct): String? {
+        val token = currentToken()
+        val wallet = getState().wallets.firstOrNull { it.id == getState().activeWalletId }
+        if (token.isEmpty() || wallet == null || wallet.eid.isEmpty() || wallet.ownerId.isEmpty()) {
+            return "钱包信息缺失，请重新进入"
+        }
+        if (rechargePaying) return "正在支付中，请稍候"
+        rechargePaying = true
+        return try {
+            val orderId =
+                api.createRechargeOrder(token, wallet.eid, wallet.ownerId, product.id)
+                    ?: return ""
+            // 渠道查询失败不阻断充值：回退到一直可用的支付宝
+            val channels =
+                api.getPayChannels(token, orderId)?.filter { it.type in PayChannelType.SUPPORTED }
+                    ?: listOf(PayChannel(PayChannelType.ALIPAY_APP, "支付宝（APP）"))
+            if (channels.isEmpty()) return "没有可用的支付方式"
+            pendingRecharge =
+                PendingRecharge(
+                    orderId = orderId,
+                    token = token,
+                    amount = product.price,
+                    channels = channels,
+                )
+            null
+        } catch (e: Exception) {
+            "支付失败：${e.message}"
+        } finally {
+            rechargePaying = false
+        }
+    }
+
+    /** 第二步：用户选定的渠道去拉预支付串并唤起支付。 */
+    suspend fun payRecharge(payType: Int): AlipayPayResult {
+        val pending = pendingRecharge ?: return AlipayPayResult(false, "")
+        if (rechargePaying) return AlipayPayResult(false, "正在支付中，请稍候")
+        rechargePaying = true
+        return try {
+            val orderInfo =
+                api.prepay(pending.token, pending.orderId, payType)
+                    ?: return AlipayPayResult(false, "")
+            val result = payWithAlipay(orderInfo)
+            if (result.success) {
+                loadWallet()
+                loadBillsNoCooldown()
+            }
+            result
+        } catch (e: Exception) {
+            AlipayPayResult(false, "支付失败：${e.message}")
+        } finally {
+            rechargePaying = false
+            pendingRecharge = null
+        }
+    }
+
+    fun dismissRecharge() {
+        if (!rechargePaying) pendingRecharge = null
+    }
 
     // 账单详情（bill/view-full）；网络异常返回 null 由页面展示失败态
     suspend fun getBillDetail(billId: String): BillDetailInfo? {
@@ -355,34 +431,6 @@ class WalletBillController(
             } finally {
                 rechargeLoading = false
             }
-        }
-    }
-
-    suspend fun submitRecharge(product: RechargeProduct): AlipayPayResult {
-        val token = currentToken()
-        val wallet = getState().wallets.firstOrNull { it.id == getState().activeWalletId }
-        if (token.isEmpty() || wallet == null || wallet.eid.isEmpty() || wallet.ownerId.isEmpty()) {
-            return AlipayPayResult(false, "钱包信息缺失，请重新进入")
-        }
-        if (rechargePaying) return AlipayPayResult(false, "正在支付中，请稍候")
-        rechargePaying = true
-        return try {
-            val orderId =
-                api.createRechargeOrder(token, wallet.eid, wallet.ownerId, product.id)
-                    ?: return AlipayPayResult(false, "")
-            val orderInfo =
-                api.prepayAlipay(token, orderId)
-                    ?: return AlipayPayResult(false, "")
-            val result = payWithAlipay(orderInfo)
-            if (result.success) {
-                loadWallet()
-                loadBillsNoCooldown()
-            }
-            result
-        } catch (e: Exception) {
-            AlipayPayResult(false, "支付失败：${e.message}")
-        } finally {
-            rechargePaying = false
         }
     }
 

@@ -141,6 +141,62 @@ data class RechargeProduct(
     val originalPrice: Double = 0.0,
 )
 
+/**
+ * 服务端返回的支付渠道（`GET /api/v1/bill/pay/channels`）。
+ *
+ * 官方客户端只展示 [PayChannelType.SUPPORTED] 白名单内的渠道，且界面只用 [name] 与按 [type] 映射的图标，
+ * `desc` / `activity` 两个字段从不读取，因此这里不解析。
+ */
+data class PayChannel(
+    val type: Int = 0,
+    val name: String = "",
+)
+
+/**
+ * 支付渠道类型，取值与官方 `PaymentType` 枚举的 `value` 一致。
+ *
+ * 只保留本项目实际能调起 SDK 的类型：官方白名单共有 6 项，本端当前仅集成了支付宝。
+ */
+object PayChannelType {
+    const val ALIPAY_APP = 21
+    const val WECHAT_APP = 11
+    const val UNIONPAY_APP = 41
+    const val WALLET = 91
+    const val THIRD = 93
+    const val BANK_ABC_APP = 52
+
+    /** 官方客户端硬编码的展示白名单。 */
+    val OFFICIAL_WHITELIST = setOf(ALIPAY_APP, WALLET, WECHAT_APP, UNIONPAY_APP, THIRD, BANK_ABC_APP)
+
+    /** 本端已集成 SDK、可以真正拉起收银台的渠道。 */
+    val SUPPORTED = setOf(ALIPAY_APP)
+
+    /** 兜底显示名，服务端未给 `name` 时使用，文案取自官方 `PaymentType.label`。 */
+    fun fallbackLabel(type: Int): String =
+        when (type) {
+            WECHAT_APP -> "微信（APP）"
+            ALIPAY_APP -> "支付宝（APP）"
+            UNIONPAY_APP -> "云闪付（APP）"
+            BANK_ABC_APP -> "农行支付（APP）"
+            WALLET -> "商家钱包"
+            THIRD -> "一卡通"
+            else -> "未知类型"
+        }
+}
+
+/**
+ * 已下单、等待用户选择支付方式的充值订单。
+ *
+ * 渠道查询（`bill/pay/channels`）必须带账单 ID，因此充值是两步：
+ * 先下单得到本结构，把 [channels] 弹框给用户选，选定后再拉预支付串。
+ */
+data class PendingRecharge(
+    val orderId: String = "",
+    val token: String = "",
+    val amount: Double = 0.0,
+    val channels: List<PayChannel> = emptyList(),
+)
+
 data class RefundProgress(
     val ctime: Long = -1L,
     val count: Int = 0,
