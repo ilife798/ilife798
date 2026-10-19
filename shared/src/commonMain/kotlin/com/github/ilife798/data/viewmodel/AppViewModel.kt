@@ -25,6 +25,7 @@ import com.github.ilife798.data.model.BackupDocument
 import com.github.ilife798.data.model.BackupGroup
 import com.github.ilife798.data.model.BackupOption
 import com.github.ilife798.data.model.BillDetailInfo
+import com.github.ilife798.data.model.CloudCard
 import com.github.ilife798.data.model.DEFAULT_SEED_COLOR
 import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
@@ -154,6 +155,17 @@ class AppViewModel : ViewModel() {
             getState = { state },
             setState = { transform -> state = transform(state) },
             onLogError = ::logError,
+        )
+
+    // 云卡卡包（见 CardController）
+    private val card =
+        CardController(
+            scope = viewModelScope,
+            apiProvider = { api },
+            getState = { state },
+            onToast = ::showToast,
+            onLogError = ::logError,
+            onSessionExpired = { handleSessionExpired() },
         )
 
     // 积分任务（见 TaskController）
@@ -703,6 +715,7 @@ class AppViewModel : ViewModel() {
         task.reset()
         device.reset()
         wallet.reset()
+        card.reset()
         scoreLists = emptyScoreLists()
         scoreFilter = ScoreFilter.All
         lastScoreLoadTime = 0L
@@ -1192,6 +1205,45 @@ class AppViewModel : ViewModel() {
     fun dismissRecharge() = wallet.dismissRecharge()
 
     suspend fun submitRefund(): DevResult = wallet.submitRefund()
+
+    val cards: List<CloudCard> get() = card.cards
+    val cardsLoading: Boolean get() = card.loading
+    val cardsLoaded: Boolean get() = card.loaded
+
+    fun loadCards(force: Boolean = false): Job? = card.loadCards(force)
+
+    fun bindCard(
+        cardId: String,
+        cardKey: String = "",
+        name: String = "",
+        onSuccess: () -> Unit = {},
+        onSettled: () -> Unit = {},
+    ) = card.bindCard(cardId, cardKey, name, onSuccess, onSettled)
+
+    fun updateCard(
+        cardId: String,
+        name: String,
+        limit: Double,
+        otherEp: Int,
+    ) = card.updateCard(cardId, name, limit, otherEp)
+
+    fun unbindCard(cardId: String) = card.unbindCard(cardId)
+
+    fun activateCard(cardId: String) = card.activateCard(cardId)
+
+    // 待补填绑卡密钥的卡号；非空表示服务端要求该卡提供密钥
+    val pendingCardKeyId: String get() = card.pendingCardKeyId
+
+    // 用户放弃补填绑卡密钥时复位，避免状态残留给下一张卡
+    fun clearPendingCardKey() = card.clearPendingCardKey()
+
+    // 扫码得到的原始文本，跨导航存活；卡包页消费后复位
+    val scannedCardRaw: String get() = card.scannedCardRaw
+
+    fun clearScannedCardRaw() = card.clearScannedRaw()
+
+    // 扫码页回传：只登记原文，绑定由卡包页的对话框统一提交
+    fun submitCardScannedRaw(raw: String) = card.submitScannedRaw(raw)
 
     val missions: List<MissionInfo> get() = task.missions
     val tasksRefreshing: Boolean get() = task.tasksRefreshing

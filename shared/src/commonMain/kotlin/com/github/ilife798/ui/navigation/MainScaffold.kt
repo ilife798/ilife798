@@ -52,6 +52,7 @@ import com.github.ilife798.ui.page.license.LicensePage
 import com.github.ilife798.ui.page.login.LoginMethodPage
 import com.github.ilife798.ui.page.login.LoginPage
 import com.github.ilife798.ui.page.login.TokenLoginPage
+import com.github.ilife798.ui.page.me.CardBagPage
 import com.github.ilife798.ui.page.me.MePage
 import com.github.ilife798.ui.page.score.ScorePage
 import com.github.ilife798.ui.page.tasks.TasksPage
@@ -296,6 +297,7 @@ private fun HomePagerPage(
                 onScoreClick = { navigate(Page.Score) },
                 onAccountClick = { navigate(Page.Account) },
                 onBillClick = { navigate(Page.Bill) },
+                onCardBagClick = { navigate(Page.CardBag) },
                 onLicenseClick = { navigate(Page.License) },
                 onBackupClick = { navigate(Page.Backup) },
                 bottomPadding = bottomPadding,
@@ -600,6 +602,26 @@ fun MainScaffold(viewModel: AppViewModel) {
                         onBack = onBack,
                         onResult = { raw ->
                             viewModel.submitScannedRaw(raw)
+                            onBack()
+                        },
+                    )
+                }
+            }
+            entry<Page.CardBag>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    CardBagPage(
+                        viewModel = viewModel,
+                        onScannerRequest = { navigate(Page.CardScan) },
+                        onBack = onBack,
+                    )
+                }
+            }
+            entry<Page.CardScan>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    QrScannerPage(
+                        onBack = onBack,
+                        onResult = { raw ->
+                            viewModel.submitCardScannedRaw(raw)
                             onBack()
                         },
                     )

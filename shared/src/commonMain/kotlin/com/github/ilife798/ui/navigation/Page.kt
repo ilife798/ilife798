@@ -18,6 +18,12 @@ sealed class Page : NavKey {
     /** 账户凭证登录页，直接填写设备控制与积分任务的登录信息。 */
     @Serializable data object TokenLogin : Page()
 
+    /** 我的卡包：云卡绑定、挂失与激活。 */
+    @Serializable data object CardBag : Page()
+
+    /** 扫码绑定云卡，结果交给 [com.github.ilife798.data.viewmodel.CardController.bindCardFromRaw]。 */
+    @Serializable data object CardScan : Page()
+
     @Serializable data object Score : Page()
 
     @Serializable data object Account : Page()

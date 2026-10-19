@@ -2,6 +2,7 @@ package com.github.ilife798.data.api
 
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.BillRecord
+import com.github.ilife798.data.model.CloudCard
 import com.github.ilife798.data.model.DeviceDetailInfo
 import com.github.ilife798.data.model.DeviceGoods
 import com.github.ilife798.data.model.DeviceOption
@@ -35,6 +36,15 @@ import kotlinx.serialization.json.jsonPrimitive
 
 // 时间戳毫秒/秒归一阈值（约 1973-03，秒级远小于此值、毫秒级远大于此值）
 private const val MILLIS_THRESHOLD = 100_000_000_000L
+
+// 响应体缺少 code 字段时的哨兵值，与任何真实业务码都不相等
+internal const val CODE_UNKNOWN = Int.MIN_VALUE
+
+// 绑卡成功
+internal const val CODE_OK = 0
+
+// ic/bind 专用：该卡需要「绑卡密钥」，客户端应提示补填后重提
+internal const val CODE_CARD_KEY_REQUIRED = -15
 
 // 请求携带的 token，用于会话失效回调归属判断
 private val requestAuthTokenKey = AttributeKey<String>("ilife798.request.auth.token")
@@ -468,7 +478,8 @@ class IlifeApi(
         )
     }
 
-    // gene.time：秒级时间戳归一为毫秒
+    // 服务端部分时间戳是秒级，统一归一为毫秒后再参与比较或格式化。
+    // 用于 gene.time 与云卡的 atime/validTime 等字段。
     private fun timeToMillis(value: Long): Long =
         when {
             value <= 0L -> 0L
@@ -979,5 +990,138 @@ class IlifeApi(
             nested?.intOrNull(key)?.let { return it }
         }
         return 0
+    }
+
+    // 云卡列表（ic/lst-owner：query size）
+    suspend fun getCardList(
+        token: String,
+        size: Int = 20,
+    ): List<CloudCard> {
+        val response =
+            client.apiGet("ic/lst-owner") {
+                parameter("size", size.toString())
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        val body = bodyJson(response)
+        if (body.intOrNull("code") != 0) return emptyList()
+        // data 为数组；部分接口会包一层 lst
+        val arr = body.arr("data") ?: body.obj("data")?.arr("lst") ?: return emptyList()
+        return arr.filterIsInstance<JsonObject>().map { parseCloudCard(it) }
+    }
+
+    // 单张云卡详情（ic/owner-view：query id）
+    suspend fun getCardDetail(
+        token: String,
+        cardId: String,
+    ): CloudCard? {
+        if (cardId.isEmpty()) return null
+        val response =
+            client.apiGet("ic/owner-view") {
+                parameter("id", cardId)
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        val body = bodyJson(response)
+        if (body.intOrNull("code") != 0) return null
+        val data = body.obj("data") ?: return null
+        return parseCloudCard(data)
+    }
+
+    // 绑定云卡（ic/bind：body CardBindParm）。
+    // 返回服务端 code：0 = 成功，-15 = 该卡需要「绑卡密钥」。
+    // 官方 ModifyCardActivity 即按两段式流程：首提被 -15 驳回后显示密钥输入框，用户补填再提一次。
+    suspend fun bindCard(
+        token: String,
+        cardId: String,
+        cardToken: String,
+        name: String,
+    ): Int {
+        val response =
+            client.apiPost("ic/bind") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    requestJson.encodeToString(
+                        CardBindRequest(id = cardId, name = name, token = cardToken),
+                    ),
+                )
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        return bodyJson(response).intOrNull("code") ?: CODE_UNKNOWN
+    }
+
+    // 修改云卡（ic/upt：body CardBindParm）
+    suspend fun updateCard(
+        token: String,
+        cardId: String,
+        cardToken: String,
+        name: String,
+        limit: Double,
+        otherEp: Int,
+    ): Boolean {
+        val response =
+            client.apiPost("ic/upt") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    requestJson.encodeToString(
+                        CardBindRequest(
+                            id = cardId,
+                            name = name,
+                            token = cardToken,
+                            limit = limit,
+                            otherEp = otherEp,
+                        ),
+                    ),
+                )
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        return bodyJson(response).intOrNull("code") == 0
+    }
+
+    // 解绑/挂失云卡（ic/unbind：body {"id": 卡ID}）
+    suspend fun unbindCard(
+        token: String,
+        cardId: String,
+    ): Boolean {
+        if (cardId.isEmpty()) return false
+        val response =
+            client.apiPost("ic/unbind") {
+                contentType(ContentType.Application.Json)
+                setBody(requestJson.encodeToString(CardRefRequest(id = cardId)))
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        return bodyJson(response).intOrNull("code") == 0
+    }
+
+    // 激活云卡（ic/valid：body {"id": 卡ID}），云卡需每 12 小时激活一次
+    suspend fun validCard(
+        token: String,
+        cardId: String,
+    ): Boolean {
+        if (cardId.isEmpty()) return false
+        val response =
+            client.apiPost("ic/valid") {
+                contentType(ContentType.Application.Json)
+                setBody(requestJson.encodeToString(CardRefRequest(id = cardId)))
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        return bodyJson(response).intOrNull("code") == 0
+    }
+
+    private fun parseCloudCard(obj: JsonObject): CloudCard {
+        val holder = obj.obj("holder")
+        val ep = obj.obj("ep")
+        return CloudCard(
+            id = obj.str("id"),
+            name = obj.str("name"),
+            holderName = holder?.str("name") ?: "",
+            enterpriseName = ep?.str("name") ?: "",
+            enterpriseAbbr = ep?.str("abbr") ?: "",
+            limit = obj.double("limit"),
+            // atime/validTime 参与「是否需再激活」的时间比较，必须统一到毫秒，
+            // 否则秒级时间戳会被当成 1970 年的毫秒值与当前时间比较，导致恒判定为过期。
+            activatedAt = timeToMillis(obj.long("atime")),
+            validTime = timeToMillis(obj.long("validTime")),
+            otherEp = obj.int("otherEp"),
+            token = obj.str("token"),
+        )
     }
 }

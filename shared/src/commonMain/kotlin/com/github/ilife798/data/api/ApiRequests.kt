@@ -74,3 +74,19 @@ data class CreateRechargeOrderRequest(
     val owner: EndpointRef,
     val prds: List<ProductRef>,
 )
+
+// 云卡绑定/修改请求体，对应官方 CardBindParm
+@Serializable
+data class CardBindRequest(
+    val id: String,
+    val name: String = "",
+    val token: String = "",
+    val limit: Double = 0.0,
+    val otherEp: Int = 0,
+)
+
+// 云卡解绑/激活请求体，官方为单键 Map：{"id": 卡ID}
+@Serializable
+data class CardRefRequest(
+    val id: String,
+)
