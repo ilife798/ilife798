@@ -1,16 +1,20 @@
 package com.github.ilife798
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.ilife798.data.viewmodel.AppViewModel
+import com.github.ilife798.pay.setWeChatFallbackAppId
 import com.github.ilife798.ui.component.DisclaimerDialog
 import com.github.ilife798.ui.component.SponsorDialog
 import com.github.ilife798.ui.navigation.MainScaffold
 import com.github.ilife798.ui.theme.AppTheme
 
 @Composable
-fun App() {
+fun App(weChatFallbackAppId: String = "") {
+    // 仅 Android 写一次；iOS 无微信 SDK，忽略该值。
+    remember(weChatFallbackAppId) { setWeChatFallbackAppId(weChatFallbackAppId) }
     val viewModel = viewModel { AppViewModel() }
     val state = viewModel.state
     AppTheme(

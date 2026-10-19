@@ -6,6 +6,8 @@ import com.github.ilife798.data.model.DeviceDetailInfo
 import com.github.ilife798.data.model.DeviceGoods
 import com.github.ilife798.data.model.DeviceOption
 import com.github.ilife798.data.model.DeviceSubState
+import com.github.ilife798.data.model.PayChannel
+import com.github.ilife798.data.model.PayChannelType
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.WalletAccount
@@ -24,6 +26,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.util.AttributeKey
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -779,19 +783,72 @@ class IlifeApi(
         return body.strOrNull("data")?.takeIf { it.isNotEmpty() && it != "null" }
     }
 
-    suspend fun prepayAlipay(
+    /**
+     * 查询某个账单可用的支付渠道（`GET /api/v1/bill/pay/channels?id={billId}`）。
+     *
+     * 官方在此之后还会用 6 项硬编码白名单过滤一遍，过滤后为空就提示「没有可用的支付方式」。
+     * 本端沿用同样的过滤，但只保留真正集成过 SDK 的渠道，避免用户点到拉不起来的选项。
+     *
+     * 返回 null 表示接口调用失败（网络/服务端错误），返回空列表表示服务端明确没给渠道。
+     * 两者触发的原因不同，上层提示文案也不同。
+     */
+    suspend fun getPayChannels(
         token: String,
         orderId: String,
-    ): String? {
+    ): List<PayChannel>? {
         if (orderId.isEmpty()) return null
         val response =
-            client.apiGet("trans/prepay/21") {
+            client.apiGet("bill/pay/channels") {
                 parameter("id", orderId)
                 apiHeaders(token, APP_TYPE_DEVICE)
             }
         val body = bodyJson(response)
         if (body.intOrNull("code") != 0) return null
-        return body.strOrNull("data")?.takeIf { it.isNotEmpty() && it != "null" }
+        val channels = body.obj("data")?.arr("channels") ?: return emptyList()
+        return channels
+            .mapNotNull { item ->
+                val obj = item as? JsonObject ?: return@mapNotNull null
+                val type = obj.intOrNull("type") ?: return@mapNotNull null
+                PayChannel(
+                    type = type,
+                    name =
+                        obj.strOrNull("name")?.takeIf { it.isNotEmpty() }
+                            ?: PayChannelType.fallbackLabel(type),
+                )
+            }
+            // 只保留官方白名单内的取值；白名单外的一律不展示
+            .filter { it.type in PayChannelType.OFFICIAL_WHITELIST }
+            // 白名单内但本端拉不起 SDK 的渠道保留展示、标为不可用，由界面灰显
+            .map { item ->
+                val supported = PayChannelType.isSupported(item.type)
+                item.copy(
+                    unavailable = !supported,
+                    name = if (supported) item.name else item.name + PayChannelType.UNAVAILABLE_SUFFIX,
+                )
+            }
+    }
+
+    /**
+     * 拉取预支付串：`GET /api/v1/trans/prepay/{type}?id={账单ID}`。
+     *
+     * 返回的 `data` 类型随渠道而异：支付宝（21）/ 一卡通（93）/ 云闪付（41）/ 农行（52）
+     * 返回字符串（orderInfo / sign_params / 银联 tn），微信（11）返回 JSON 对象 `PayInfo`。
+     * 因此这里原样交回 [JsonElement]，由调用方按渠道解析。
+     */
+    suspend fun prepay(
+        token: String,
+        orderId: String,
+        payType: Int = PayChannelType.ALIPAY_APP,
+    ): JsonElement? {
+        if (orderId.isEmpty() || payType <= 0) return null
+        val response =
+            client.apiGet("trans/prepay/$payType") {
+                parameter("id", orderId)
+                apiHeaders(token, APP_TYPE_DEVICE)
+            }
+        val body = bodyJson(response)
+        if (body.intOrNull("code") != 0) return null
+        return body["data"]?.takeUnless { it is JsonNull }
     }
 
     // 钱包退款：POST /acc/wallet/refund，type=23（支付宝小程序，与官方 RefundActivity 一致）

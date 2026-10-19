@@ -2434,6 +2434,27 @@
             ]
         },
         {
+            "uniqueId": "com.tencent.mm.opensdk:wechat-sdk-android",
+            "artifactVersion": "6.8.40",
+            "name": "Wechat SDK for Android",
+            "description": "Wechat SDK for Android",
+            "website": "https://open.weixin.qq.com/",
+            "developers": [
+                {
+                    "name": "Tencent Wechat, Inc."
+                }
+            ],
+            "scm": {
+                "url": "internal_repo"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "dev.drewhamilton.poko:poko-annotations",
             "artifactVersion": "0.23.1",
             "name": "Poko Annotations",

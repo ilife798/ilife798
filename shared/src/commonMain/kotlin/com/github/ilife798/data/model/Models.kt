@@ -150,12 +150,19 @@ data class RechargeProduct(
 data class PayChannel(
     val type: Int = 0,
     val name: String = "",
+    /**
+     * 服务端下发了该渠道、但本端拉不起收银台时置为 true。
+     *
+     * 界面会把这类渠道灰显、拒绝点击，并在名称后追加「（第三方不可用）」，
+     * 避免用户点了没有任何反应。
+     */
+    val unavailable: Boolean = false,
 )
 
 /**
  * 支付渠道类型，取值与官方 `PaymentType` 枚举的 `value` 一致。
  *
- * 只保留本项目实际能调起 SDK 的类型：官方白名单共有 6 项，本端当前仅集成了支付宝。
+ * 官方白名单共有 6 项；本端已实现其中 4 项（见 [SUPPORTED]），云闪付与农行的 SDK 未公开分发。
  */
 object PayChannelType {
     const val ALIPAY_APP = 21
@@ -168,8 +175,23 @@ object PayChannelType {
     /** 官方客户端硬编码的展示白名单。 */
     val OFFICIAL_WHITELIST = setOf(ALIPAY_APP, WALLET, WECHAT_APP, UNIONPAY_APP, THIRD, BANK_ABC_APP)
 
-    /** 本端已集成 SDK、可以真正拉起收银台的渠道。 */
-    val SUPPORTED = setOf(ALIPAY_APP)
+    /**
+     * 本端已实现、可以真正走通的渠道。
+     *
+     * - [ALIPAY_APP]：支付宝 SDK `PayTask.payV2`
+     * - [THIRD]：一卡通，复用支付宝 SDK 的 `OpenAuthTask` + `BizType.Deduct`
+     * - [WALLET]：商家钱包，纯服务端扣款，成功后刷新余额与账单
+     * - [WECHAT_APP]：微信 SDK `PayReq`
+     *
+     * 云闪付 [UNIONPAY_APP] 与农行 [BANK_ABC_APP] 的 SDK 未公开分发，服务端即使下发也会被标为不可用。
+     */
+    val SUPPORTED = setOf(ALIPAY_APP, THIRD, WALLET, WECHAT_APP)
+
+    /** 名称后缀：渠道可用但第三方未集成好时追加。 */
+    const val UNAVAILABLE_SUFFIX = "（第三方不可用）"
+
+    /** 该渠道本端能否真正拉起收银台。 */
+    fun isSupported(type: Int): Boolean = type in SUPPORTED
 
     /** 兜底显示名，服务端未给 `name` 时使用，文案取自官方 `PaymentType.label`。 */
     fun fallbackLabel(type: Int): String =

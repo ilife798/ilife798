@@ -35,6 +35,7 @@ import com.github.ilife798.data.model.ImportMergeResult
 import com.github.ilife798.data.model.ImportPreview
 import com.github.ilife798.data.model.MissionInfo
 import com.github.ilife798.data.model.PaletteStyle
+import com.github.ilife798.data.model.PendingRecharge
 import com.github.ilife798.data.model.PointsInfo
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
@@ -1163,6 +1164,7 @@ class AppViewModel : ViewModel() {
     val rechargeProducts: List<RechargeProduct> get() = wallet.rechargeProducts
     val rechargeLoading: Boolean get() = wallet.rechargeLoading
     val rechargePaying: Boolean get() = wallet.rechargePaying
+    val pendingRecharge: PendingRecharge? get() = wallet.pendingRecharge
     val refundSubmitting: Boolean get() = wallet.refundSubmitting
 
     fun loadWallet(): Job? = wallet.loadWallet()
@@ -1183,7 +1185,11 @@ class AppViewModel : ViewModel() {
 
     fun loadRechargeProducts() = wallet.loadRechargeProducts()
 
-    suspend fun submitRecharge(product: RechargeProduct): AlipayPayResult = wallet.submitRecharge(product)
+    suspend fun startRecharge(product: RechargeProduct): String? = wallet.startRecharge(product)
+
+    suspend fun payRecharge(payType: Int): AlipayPayResult = wallet.payRecharge(payType)
+
+    fun dismissRecharge() = wallet.dismissRecharge()
 
     suspend fun submitRefund(): DevResult = wallet.submitRefund()
 

@@ -288,8 +288,9 @@ private fun PayMethodPickerDialog(
     onDismiss: () -> Unit,
     onPick: (Int) -> Unit,
 ) {
+    // 默认选中第一个真正可用的渠道，跳过灰显项
     var selectedType by remember(pending.orderId) {
-        mutableStateOf(pending.channels.firstOrNull()?.type ?: 0)
+        mutableStateOf(pending.channels.firstOrNull { !it.unavailable }?.type ?: 0)
     }
     ConfirmDialog(
         title = "选择支付方式",
@@ -309,12 +310,13 @@ private fun PayMethodPickerDialog(
         // 渠道数量少，直接纵向排列，选中项用主色描边标示
         pending.channels.forEach { channel ->
             val selected = channel.type == selectedType
+            val selectable = !paying && !channel.unavailable
             Card(
                 modifier =
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
-                onClick = { if (!paying) selectedType = channel.type },
+                onClick = { if (selectable) selectedType = channel.type },
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -323,10 +325,16 @@ private fun PayMethodPickerDialog(
                     Text(
                         text = channel.name,
                         style = MiuixTheme.textStyles.body1,
-                        color = MiuixTheme.colorScheme.onSurface,
+                        // 灰显渠道用弱化色，和可点的项区分开
+                        color =
+                            if (channel.unavailable) {
+                                MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            } else {
+                                MiuixTheme.colorScheme.onSurface
+                            },
                         modifier = Modifier.weight(1f),
                     )
-                    if (selected) {
+                    if (selected && !channel.unavailable) {
                         Icon(
                             imageVector = MiuixIcons.Ok,
                             contentDescription = "已选择",

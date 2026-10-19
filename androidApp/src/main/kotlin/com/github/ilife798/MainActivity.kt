@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            App()
+            App(weChatFallbackAppId = BuildConfig.WECHAT_FALLBACK_APP_ID)
         }
     }
 

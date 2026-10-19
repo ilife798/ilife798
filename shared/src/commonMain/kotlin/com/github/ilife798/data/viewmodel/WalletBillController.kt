@@ -17,6 +17,8 @@ import com.github.ilife798.data.model.SpendingStats
 import com.github.ilife798.data.model.WalletAccount
 import com.github.ilife798.pay.AlipayPayResult
 import com.github.ilife798.pay.payWithAlipay
+import com.github.ilife798.pay.payWithOneCard
+import com.github.ilife798.pay.payWithWeChat
 import com.github.ilife798.util.currentTimeFormatted
 import com.github.ilife798.util.currentTimeMillis
 import com.github.ilife798.util.formatTimestamp
@@ -26,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
 
 private const val BILL_PAGE_SIZE = 200
 private const val BILL_STATUS = 3
@@ -114,9 +117,9 @@ class WalletBillController(
                     ?: return ""
             // 渠道查询失败不阻断充值：回退到一直可用的支付宝
             val channels =
-                api.getPayChannels(token, orderId)?.filter { it.type in PayChannelType.SUPPORTED }
+                api.getPayChannels(token, orderId)
                     ?: listOf(PayChannel(PayChannelType.ALIPAY_APP, "支付宝（APP）"))
-            if (channels.isEmpty()) return "没有可用的支付方式"
+            if (channels.none { !it.unavailable }) return "没有可用的支付方式"
             pendingRecharge =
                 PendingRecharge(
                     orderId = orderId,
@@ -132,16 +135,58 @@ class WalletBillController(
         }
     }
 
-    /** 第二步：用户选定的渠道去拉预支付串并唤起支付。 */
+    /**
+     * 第二步：用户选定的渠道去拉预支付串并唤起对应收银台。
+     *
+     * 各渠道的预支付串形态不同，因此必须按 [payType] 分派：
+     * - 21 支付宝：`data` 是 orderInfo，交给支付宝 SDK `PayTask.payV2`
+     * - 93 一卡通：`data` 是 sign_params，交给支付宝 SDK `OpenAuthTask`
+     * - 11 微信：`data` 是 `PayInfo` JSON 对象，交给微信 SDK `PayReq`
+     * - 91 商家钱包：纯服务端扣款，预支付成功即完成，直接刷新余额与账单
+     */
     suspend fun payRecharge(payType: Int): AlipayPayResult {
         val pending = pendingRecharge ?: return AlipayPayResult(false, "")
+        if (payType !in PayChannelType.SUPPORTED) {
+            return AlipayPayResult(false, "该支付方式暂不可用")
+        }
         if (rechargePaying) return AlipayPayResult(false, "正在支付中，请稍候")
         rechargePaying = true
         return try {
-            val orderInfo =
+            val data =
                 api.prepay(pending.token, pending.orderId, payType)
-                    ?: return AlipayPayResult(false, "")
-            val result = payWithAlipay(orderInfo)
+                    ?: return AlipayPayResult(false, "获取预支付信息失败，请稍后重试")
+            val result =
+                when (payType) {
+                    PayChannelType.WALLET -> {
+                        AlipayPayResult(true, "支付成功")
+                    }
+
+                    PayChannelType.ALIPAY_APP -> {
+                        val orderInfo = (data as? JsonPrimitive)?.content
+                        if (orderInfo.isNullOrEmpty()) {
+                            AlipayPayResult(false, "获取支付参数失败，请稍后重试")
+                        } else {
+                            payWithAlipay(orderInfo)
+                        }
+                    }
+
+                    PayChannelType.THIRD -> {
+                        val signParams = (data as? JsonPrimitive)?.content
+                        if (signParams.isNullOrEmpty()) {
+                            AlipayPayResult(false, "获取一卡通授权参数失败，请稍后重试")
+                        } else {
+                            payWithOneCard(signParams)
+                        }
+                    }
+
+                    PayChannelType.WECHAT_APP -> {
+                        payWithWeChat(data.toString())
+                    }
+
+                    else -> {
+                        AlipayPayResult(false, "该支付方式暂不可用")
+                    }
+                }
             if (result.success) {
                 loadWallet()
                 loadBillsNoCooldown()
