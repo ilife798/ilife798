@@ -22,9 +22,6 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-// 瞬时网络异常的最大重试次数
-private const val NETWORK_RETRY_ATTEMPTS = 3
-
 // 积分任务：合并多渠道任务列表、执行并停止、运行日志。
 class TaskController(
     private val scope: CoroutineScope,
@@ -58,6 +55,11 @@ class TaskController(
         missions = emptyList()
         tasksRefreshing = false
     }
+
+    /** [runMissions] 的执行结果，携带累加后的总收益。 */
+    private data class MissionRunResult(
+        val gained: Int,
+    )
 
     private data class MergedMissions(
         val missions: List<MissionInfo>,
@@ -302,93 +304,17 @@ class TaskController(
                     missions = missionList
                     var gained = 0
 
-                    // 先处理每日签到，再执行各任务
-                    if (merged.dailyAdId.isNotBlank() && merged.dailyToken.isNotEmpty()) {
-                        val signToken = merged.dailyToken
-                        val weekDay = getDayOfWeek()
-                        val alreadySigned = (merged.weekMask and (1 shl (weekDay - 1))) != 0
-                        if (alreadySigned) {
-                            addTaskLog("每日签到: 今日已签到")
-                        } else {
-                            val wait = rateLimiter.reserveDelay(signToken, currentTimeMillis())
-                            if (wait > 0) {
-                                addTaskLog("等待 ${wait / 1000} 秒...")
-                                delay(wait.milliseconds)
-                            }
-                            addTaskLog("每日签到: 执行中...")
-                            val signResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
-                            if (signResult.success) {
-                                gained += merged.dailyScore
-                                RunNotifications.updateTask(gained)
-                                addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
-                            } else if (signResult.code == -98) {
-                                addTaskLog("每日签到: 请求频繁，等待60秒重试...")
-                                delay(60.seconds)
-                                val retryResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
-                                if (retryResult.success) {
-                                    gained += merged.dailyScore
-                                    RunNotifications.updateTask(gained)
-                                    addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
-                                } else {
-                                    addTaskLog("每日签到: 失败 ${retryResult.message}")
-                                }
-                            } else {
-                                addTaskLog("每日签到: 失败 ${signResult.message}")
-                            }
-                        }
-                    }
+                    gained += runDailySignin(merged, uid)
 
-                    // 任务
                     val validMissions =
                         missionList.filter {
                             !it.isDailySignin && it.limit > 0 && it.score > 0 &&
                                 it.sourceToken.isNotEmpty()
                         }
                     addTaskLog("共 ${validMissions.size} 个可执行任务")
-                    var executed = 0
-                    for (mission in validMissions) {
-                        if (!isActive) break
-                        val execToken = mission.sourceToken
-                        val completed = mission.dailyCompleted
-                        val maxCount = mission.limit
-                        if (completed >= maxCount) {
-                            addTaskLog("[${mission.name}] 已完成 $completed/$maxCount，跳过")
-                            continue
-                        }
-                        try {
-                            for (round in (completed + 1)..maxCount) {
-                                if (!isActive) break
-                                addTaskLog("[${mission.name}] ($round/$maxCount) 执行中...")
-                                delay(30.seconds)
-                                var execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
-                                if (execResult.code == -98) {
-                                    addTaskLog("[${mission.name}] 请求频繁，等待60秒重试...")
-                                    delay(60.seconds)
-                                    execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
-                                }
-                                if (execResult.success) {
-                                    executed++
-                                    gained += mission.score
-                                    RunNotifications.updateTask(gained)
-                                    addTaskLog("[${mission.name}] ($round/$maxCount) 成功 +${mission.score}分")
-                                    missions =
-                                        missions.map {
-                                            if (it.adId == mission.adId) it.copy(dailyCompleted = it.dailyCompleted + 1) else it
-                                        }
-                                } else if (execResult.code == -98) {
-                                    addTaskLog("[${mission.name}] 请求频繁，跳过剩余任务")
-                                    break
-                                } else {
-                                    addTaskLog("[${mission.name}] ($round/$maxCount) 失败: ${execResult.message}")
-                                }
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            // 单个任务失败不中断整轮，继续后续任务
-                            addTaskLog("[${mission.name}] 执行异常: ${e.message}")
-                        }
-                    }
+                    val execResult = runMissions(validMissions, uid, gained)
+                    gained = execResult.gained
+
                     if (isActive && isCurrentAccount()) {
                         addTaskLog("任务完成，共获得 $gained 积分")
                         onToast("积分任务已完成，共获得 $gained 积分")
@@ -413,6 +339,114 @@ class TaskController(
                     if (taskJob === currentCoroutineContext()[Job]) taskJob = null
                 }
             }
+    }
+
+    /**
+     * 每日签到阶段。今日已签或缺少签到凭证时直接跳过。
+     * 返回本轮新增积分（成功才计入），调用方累加到总收益。
+     */
+    private suspend fun runDailySignin(
+        merged: MergedMissions,
+        uid: String,
+    ): Int {
+        if (merged.dailyAdId.isBlank() || merged.dailyToken.isEmpty()) return 0
+        val signToken = merged.dailyToken
+        val weekDay = getDayOfWeek()
+        val alreadySigned = (merged.weekMask and (1 shl (weekDay - 1))) != 0
+        if (alreadySigned) {
+            addTaskLog("每日签到: 今日已签到")
+            return 0
+        }
+        val wait = rateLimiter.reserveDelay(signToken, currentTimeMillis())
+        if (wait > 0) {
+            addTaskLog("等待 ${wait / 1000} 秒...")
+            delay(wait.milliseconds)
+        }
+        addTaskLog("每日签到: 执行中...")
+        val signResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
+        if (signResult.success) {
+            RunNotifications.updateTask(merged.dailyScore)
+            addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
+            return merged.dailyScore
+        }
+        if (signResult.code == -98) {
+            addTaskLog("每日签到: 请求频繁，等待60秒重试...")
+            delay(60.seconds)
+            val retryResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
+            if (retryResult.success) {
+                RunNotifications.updateTask(merged.dailyScore)
+                addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
+                return merged.dailyScore
+            }
+            addTaskLog("每日签到: 失败 ${retryResult.message}")
+        } else {
+            addTaskLog("每日签到: 失败 ${signResult.message}")
+        }
+        return 0
+    }
+
+    /** 逐任务执行阶段。返回累计收益，供调用方继续累加。 */
+    private suspend fun runMissions(
+        validMissions: List<MissionInfo>,
+        uid: String,
+        startGained: Int,
+    ): MissionRunResult {
+        var gained = startGained
+        for (mission in validMissions) {
+            if (!currentCoroutineContext().isActive) break
+            val completed = mission.dailyCompleted
+            val maxCount = mission.limit
+            if (completed >= maxCount) {
+                addTaskLog("[${mission.name}] 已完成 $completed/$maxCount，跳过")
+                continue
+            }
+            try {
+                gained = runMissionRounds(mission, uid, gained)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 单个任务失败不中断整轮，继续后续任务
+                addTaskLog("[${mission.name}] 执行异常: ${e.message}")
+            }
+        }
+        return MissionRunResult(gained)
+    }
+
+    /** 单个任务的多轮执行，返回累加后的收益。请求频繁时跳出该任务的剩余轮次。 */
+    private suspend fun runMissionRounds(
+        mission: MissionInfo,
+        uid: String,
+        startGained: Int,
+    ): Int {
+        var gained = startGained
+        val execToken = mission.sourceToken
+        val maxCount = mission.limit
+        for (round in (mission.dailyCompleted + 1)..maxCount) {
+            if (!currentCoroutineContext().isActive) break
+            addTaskLog("[${mission.name}] ($round/$maxCount) 执行中...")
+            delay(30.seconds)
+            var execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
+            if (execResult.code == -98) {
+                addTaskLog("[${mission.name}] 请求频繁，等待60秒重试...")
+                delay(60.seconds)
+                execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
+            }
+            if (execResult.success) {
+                gained += mission.score
+                RunNotifications.updateTask(gained)
+                addTaskLog("[${mission.name}] ($round/$maxCount) 成功 +${mission.score}分")
+                missions =
+                    missions.map {
+                        if (it.adId == mission.adId) it.copy(dailyCompleted = it.dailyCompleted + 1) else it
+                    }
+            } else if (execResult.code == -98) {
+                addTaskLog("[${mission.name}] 请求频繁，跳过剩余任务")
+                break
+            } else {
+                addTaskLog("[${mission.name}] ($round/$maxCount) 失败: ${execResult.message}")
+            }
+        }
+        return gained
     }
 
     fun stop() {
@@ -453,24 +487,14 @@ class TaskController(
         }
     }
 
-    // 对瞬时网络异常做有限次退避重试（DNS 解析失败、连接/读取超时等）
-    private suspend fun <T> withNetworkRetry(block: suspend () -> T): T {
-        var backoffMs = 2_000L
-        var attempt = 1
-        while (true) {
-            try {
-                return block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (attempt >= NETWORK_RETRY_ATTEMPTS || !isTransientNetworkError(e)) throw e
-                addTaskLog("网络异常，${backoffMs / 1000} 秒后重试($attempt/${NETWORK_RETRY_ATTEMPTS - 1})...")
-                delay(backoffMs.milliseconds)
-                backoffMs *= 2
-                attempt++
-            }
-        }
-    }
+    // 网络重试统一走 NetworkErrors.kt 的共享实现，此处只负责把重试写进任务日志
+    private suspend fun <T> withNetworkRetry(block: suspend () -> T): T =
+        withNetworkRetry(
+            onRetry = { seconds, attempt ->
+                addTaskLog("网络异常，$seconds 秒后重试($attempt/${NETWORK_RETRY_ATTEMPTS - 1})...")
+            },
+            block = block,
+        )
 
     private fun addTaskLog(message: String) {
         val time = currentTimeFormatted("HH:mm:ss")

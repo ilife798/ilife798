@@ -2,6 +2,7 @@ package com.github.ilife798.data.api
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.header
@@ -19,6 +20,11 @@ actual fun createHttpClient(): HttpClient =
                     isLenient = true
                 },
             )
+        }
+        install(HttpTimeout) {
+            connectTimeoutMillis = ApiConfig.CONNECT_TIMEOUT_MS
+            requestTimeoutMillis = ApiConfig.REQUEST_TIMEOUT_MS
+            socketTimeoutMillis = ApiConfig.SOCKET_TIMEOUT_MS
         }
         defaultRequest {
             contentType(ContentType.Application.Json)

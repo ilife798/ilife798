@@ -218,10 +218,8 @@ class AppViewModel : ViewModel() {
     }
 
     private fun saveAccountQuietly(list: List<AccountEntry>) {
-        try {
+        guarded(Unit, { logError("saveAccountQuietly", it) }) {
             AppStorage.instance.saveString(StorageKeys.ACCOUNT_LIST, accountListJson.encodeToString(list))
-        } catch (e: Exception) {
-            logError("saveAccountQuietly", e)
         }
     }
 
@@ -267,11 +265,8 @@ class AppViewModel : ViewModel() {
             val storage = AppStorage.instance
             val listJson = storage.getString(StorageKeys.ACCOUNT_LIST)
             var list =
-                try {
+                guarded(emptyList<AccountEntry>(), { logError("loadSavedAccount.parse", it) }) {
                     if (listJson.isNullOrBlank()) emptyList() else accountListJson.decodeFromString<List<AccountEntry>>(listJson)
-                } catch (e: Exception) {
-                    logError("loadSavedAccount.parse", e)
-                    emptyList()
                 }
             var index = storage.getInt(StorageKeys.CURRENT_ACCOUNT_INDEX, -1)
             if (list.isEmpty() && storage.getBoolean(StorageKeys.IS_LOGGED_IN)) {
@@ -433,11 +428,8 @@ class AppViewModel : ViewModel() {
                     val token = entry.account.preferredToken
                     if (token.isEmpty()) return@forEachIndexed
                     val expired =
-                        try {
+                        guarded(null, { logError("validateAccounts", it) }) {
                             withContext(Dispatchers.Default) { api.isTokenExpired(token) }
-                        } catch (e: Exception) {
-                            logError("validateAccounts", e)
-                            null
                         }
                     if (expired == true && removeAccountByToken(token)) removed++
                 }
@@ -476,11 +468,8 @@ class AppViewModel : ViewModel() {
         if (input.isEmpty()) return
         viewModelScope.launch {
             val probe =
-                try {
+                guarded(null, { logError("probeToken", it) }) {
                     api.probeToken(input)
-                } catch (e: Exception) {
-                    logError("probeToken", e)
-                    null
                 }
             if (probe == null || (!probe.appValid && !probe.mainValid)) {
                 showToast("登录信息无效，未保存")
@@ -614,8 +603,9 @@ class AppViewModel : ViewModel() {
                     showToast("积分任务登录信息无效，未保存")
                     return@launch
                 }
-                // 两条凭据必须属于同一账户，否则会写出一个不存在的混合身份
-                if (deviceProbe != null && pointsProbe != null) {
+                // 两条凭据必须属于同一账户，否则会写出一个不存在的混合身份。
+                // deviceProbe 已在前面判空返回，此处只需判 pointsProbe
+                if (pointsProbe != null) {
                     if (deviceProbe.uid.isEmpty() || pointsProbe.uid.isEmpty()) {
                         showToast("无法确认两条登录信息属于同一账户，未保存")
                         return@launch
@@ -652,11 +642,8 @@ class AppViewModel : ViewModel() {
 
     // 探测登录信息，失败或无效统一返回 null，避免调用方重复判空
     private suspend fun probeTokenOrNull(token: String): TokenProbe? =
-        try {
+        guarded(null, { logError("probeToken", it) }) {
             api.probeToken(token).takeIf { it.appValid || it.mainValid }
-        } catch (e: Exception) {
-            logError("probeToken", e)
-            null
         }
 
     // 验证码
@@ -822,16 +809,16 @@ class AppViewModel : ViewModel() {
         saveAccount()
     }
 
-    val homeDeviceType: HomeDeviceType get() = device.homeDeviceType
-    val scannedDeviceId: String? get() = device.scannedDeviceId
-    val deviceDetail: DeviceDetailInfo? get() = device.deviceDetail
-    val pollingDeviceId: String? get() = device.pollingDeviceId
-    val startingDeviceId: String? get() = device.startingDeviceId
-    val autoDeduct: Boolean get() = device.autoDeduct
+    val homeDeviceType: HomeDeviceType by device::homeDeviceType
+    val scannedDeviceId: String? by device::scannedDeviceId
+    val deviceDetail: DeviceDetailInfo? by device::deviceDetail
+    val pollingDeviceId: String? by device::pollingDeviceId
+    val startingDeviceId: String? by device::startingDeviceId
+    val autoDeduct: Boolean by device::autoDeduct
 
     fun selectHomeDeviceType(type: HomeDeviceType) = device.selectHomeDeviceType(type)
 
-    val deviceNotes: DeviceNotes get() = device.deviceNotes
+    val deviceNotes: DeviceNotes by device::deviceNotes
 
     fun deviceNote(deviceId: String): String = device.deviceNote(deviceId)
 
@@ -842,7 +829,7 @@ class AppViewModel : ViewModel() {
 
     fun dropDeviceNotes(deviceIds: Collection<String>) = device.dropDeviceNotes(deviceIds)
 
-    val deviceAliases: DeviceAliases get() = device.deviceAliases
+    val deviceAliases: DeviceAliases by device::deviceAliases
 
     fun deviceAlias(deviceId: String): String = device.deviceAlias(deviceId)
 
@@ -1255,17 +1242,17 @@ class AppViewModel : ViewModel() {
         }
     }
 
-    val billLoadingMore: Boolean get() = wallet.billLoadingMore
-    val billHasMore: Boolean get() = wallet.billHasMore
-    val billStatus: Int get() = wallet.billStatus
-    val billRefreshing: Boolean get() = wallet.billRefreshing
-    val refundProgress: RefundProgress? get() = wallet.refundProgress
-    val spendingStats: SpendingStats get() = wallet.spendingStats
-    val rechargeProducts: List<RechargeProduct> get() = wallet.rechargeProducts
-    val rechargeLoading: Boolean get() = wallet.rechargeLoading
-    val rechargePaying: Boolean get() = wallet.rechargePaying
-    val pendingRecharge: PendingRecharge? get() = wallet.pendingRecharge
-    val refundSubmitting: Boolean get() = wallet.refundSubmitting
+    val billLoadingMore: Boolean by wallet::billLoadingMore
+    val billHasMore: Boolean by wallet::billHasMore
+    val billStatus: Int by wallet::billStatus
+    val billRefreshing: Boolean by wallet::billRefreshing
+    val refundProgress: RefundProgress? by wallet::refundProgress
+    val spendingStats: SpendingStats by wallet::spendingStats
+    val rechargeProducts: List<RechargeProduct> by wallet::rechargeProducts
+    val rechargeLoading: Boolean by wallet::rechargeLoading
+    val rechargePaying: Boolean by wallet::rechargePaying
+    val pendingRecharge: PendingRecharge? by wallet::pendingRecharge
+    val refundSubmitting: Boolean by wallet::refundSubmitting
 
     fun loadWallet(): Job? = wallet.loadWallet()
 
@@ -1293,9 +1280,9 @@ class AppViewModel : ViewModel() {
 
     suspend fun submitRefund(): DevResult = wallet.submitRefund()
 
-    val cards: List<CloudCard> get() = card.cards
-    val cardsLoading: Boolean get() = card.loading
-    val cardsLoaded: Boolean get() = card.loaded
+    val cards: List<CloudCard> by card::cards
+    val cardsLoading: Boolean by card::loading
+    val cardsLoaded: Boolean by card::loaded
 
     fun loadCards(force: Boolean = false): Job? = card.loadCards(force)
 
@@ -1319,21 +1306,21 @@ class AppViewModel : ViewModel() {
     fun activateCard(cardId: String) = card.activateCard(cardId)
 
     // 待补填绑卡密钥的卡号；非空表示服务端要求该卡提供密钥
-    val pendingCardKeyId: String get() = card.pendingCardKeyId
+    val pendingCardKeyId: String by card::pendingCardKeyId
 
     // 用户放弃补填绑卡密钥时复位，避免状态残留给下一张卡
     fun clearPendingCardKey() = card.clearPendingCardKey()
 
     // 扫码得到的原始文本，跨导航存活；卡包页消费后复位
-    val scannedCardRaw: String get() = card.scannedCardRaw
+    val scannedCardRaw: String by card::scannedCardRaw
 
     fun clearScannedCardRaw() = card.clearScannedRaw()
 
     // 扫码页回传：只登记原文，绑定由卡包页的对话框统一提交
     fun submitCardScannedRaw(raw: String) = card.submitScannedRaw(raw)
 
-    val missions: List<MissionInfo> get() = task.missions
-    val tasksRefreshing: Boolean get() = task.tasksRefreshing
+    val missions: List<MissionInfo> by task::missions
+    val tasksRefreshing: Boolean by task::tasksRefreshing
     val allTasksCompleted: Boolean get() = task.areAllTasksCompleted()
 
     fun loadMissions() = task.loadMissions()

@@ -9,6 +9,7 @@ import com.github.ilife798.RunNotifications
 import com.github.ilife798.StorageKeys
 import com.github.ilife798.data.api.APP_TYPE_DEVICE
 import com.github.ilife798.data.api.APP_TYPE_POINTS
+import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.DevStatusResult
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.model.AccountInfo
@@ -118,8 +119,8 @@ class DeviceController(
         if (index !in list.indices) return null
         val account = list[index].account
         return when {
-            account.appToken.isNotEmpty() -> DeviceAuth(account.appToken, APP_TYPE_DEVICE)
-            account.token.isNotEmpty() -> DeviceAuth(account.token, APP_TYPE_POINTS)
+            account.appToken.isNotEmpty() -> DeviceAuth(account.appToken, APP_TYPE_DEVICE, index)
+            account.token.isNotEmpty() -> DeviceAuth(account.token, APP_TYPE_POINTS, index)
             else -> null
         }
     }
@@ -215,9 +216,15 @@ class DeviceController(
     private fun currentToken(): String = getState().account.preferredToken
 
     // 设备控制鉴权：优先 appToken（设备通道），缺失时回退积分 token
+
+    /**
+     * 一次设备请求使用的凭据。[accountIndex] 是它在账号列表里的下标，
+     * 回退成功后靠它定位实际生效的账号并提示用户。
+     */
     private data class DeviceAuth(
         val token: String,
         val appType: String,
+        val accountIndex: Int = -1,
     )
 
     private fun deviceAuth(): DeviceAuth {
@@ -225,6 +232,7 @@ class DeviceController(
         return DeviceAuth(
             token = if (useApp) getState().account.appToken else getState().account.token,
             appType = if (useApp) APP_TYPE_DEVICE else APP_TYPE_POINTS,
+            accountIndex = getState().currentAccountIndex,
         )
     }
 
@@ -260,19 +268,14 @@ class DeviceController(
         if (homeDeviceType == type && homeDeviceTypeExplicit) return
         homeDeviceType = type
         homeDeviceTypeExplicit = true
-        try {
+        guarded(Unit, { onLogError("selectHomeDeviceType", it) }) {
             AppStorage.instance.saveString(StorageKeys.HOME_DEVICE_TYPE, type.name)
-        } catch (e: Exception) {
-            onLogError("selectHomeDeviceType", e)
         }
     }
 
     fun loadDeviceNotesPref() {
-        try {
-            val saved = AppStorage.instance.getString(StorageKeys.DEVICE_NOTES)
-            deviceNotes = decodeDeviceNotes(saved)
-        } catch (e: Exception) {
-            onLogError("loadDeviceNotesPref", e)
+        guarded(Unit, { onLogError("loadDeviceNotesPref", it) }) {
+            deviceNotes = decodeDeviceNotes(AppStorage.instance.getString(StorageKeys.DEVICE_NOTES))
         }
     }
 
@@ -304,19 +307,14 @@ class DeviceController(
     }
 
     private fun persistDeviceNotes() {
-        try {
+        guarded(Unit, { onLogError("persistDeviceNotes", it) }) {
             AppStorage.instance.saveString(StorageKeys.DEVICE_NOTES, encodeDeviceNotes(deviceNotes))
-        } catch (e: Exception) {
-            onLogError("persistDeviceNotes", e)
         }
     }
 
     fun loadDeviceAliasesPref() {
-        try {
-            val saved = AppStorage.instance.getString(StorageKeys.DEVICE_ALIASES)
-            deviceAliases = decodeDeviceAliases(saved)
-        } catch (e: Exception) {
-            onLogError("loadDeviceAliasesPref", e)
+        guarded(Unit, { onLogError("loadDeviceAliasesPref", it) }) {
+            deviceAliases = decodeDeviceAliases(AppStorage.instance.getString(StorageKeys.DEVICE_ALIASES))
         }
     }
 
@@ -413,10 +411,8 @@ class DeviceController(
     }
 
     private fun persistDeviceAliases() {
-        try {
+        guarded(Unit, { onLogError("persistDeviceAliases", it) }) {
             AppStorage.instance.saveString(StorageKeys.DEVICE_ALIASES, encodeDeviceAliases(deviceAliases))
-        } catch (e: Exception) {
-            onLogError("persistDeviceAliases", e)
         }
     }
 
@@ -692,8 +688,6 @@ class DeviceController(
         val picked = deviceAuthOf(deviceAccountPick(deviceId))
         val auth = picked ?: deviceAuth()
         if (auth.token.isEmpty()) return
-        // 仅供停止时回退的备选账号（临时账号失败才试当前账号）
-        val fallback = deviceAuth().takeIf { selected -> selected.token.isNotEmpty() && selected.token != auth.token }
         val deviceName =
             getState()
                 .devices
@@ -710,84 +704,27 @@ class DeviceController(
                 var usedAuth = auth
                 val result =
                     if (starting) {
-                        requestNotificationPermission()
-                        // 启动前把积分抵扣开关同步到服务端，保证开关与实际扣款方式一致
-                        api.setUseScore(auth.token, value = if (autoDeduct) 1 else 0, appType = auth.appType)
-                        // 优先钱袋支付（91），失败时自动切换支付宝免密支付（21）
-                        val wallet =
-                            api.devStart(
-                                auth.token,
-                                deviceId,
-                                auth.appType,
-                                ptype = PAY_TYPE_WALLET,
-                                args = args,
-                                reportError = false,
-                            )
-                        if (wallet.success) {
-                            wallet
-                        } else {
-                            api.devStart(auth.token, deviceId, auth.appType, ptype = PAY_TYPE_ALIPAY, args = args)
-                        }
+                        startDevice(auth, deviceId, args)
                     } else {
-                        // 停止：先用选中的账号静默尝试，失败再换当前账号，两跳都不弹错，只在最终失败时报错
-                        val first = api.devEnd(auth.token, deviceId, auth.appType, reportError = false)
-                        if (first.success || fallback == null) {
-                            first
-                        } else {
-                            val second = api.devEnd(fallback.token, deviceId, fallback.appType, reportError = false)
-                            if (second.success) {
-                                usedAuth = fallback
-                                second
-                            } else {
-                                onToast(first.message.ifEmpty { second.message })
-                                first
-                            }
-                        }
+                        val outcome = stopDeviceWithFallback(auth, deviceId)
+                        usedAuth = outcome.usedAuth
+                        outcome.result
                     }
                 if (!result.success) return@launch
                 // 回退到别的账号才提示，避免用户以为选中的账号生效了
                 if (usedAuth.token != auth.token) {
-                    val name =
-                        getState()
-                            .accountList
-                            .getOrNull(deviceAccountPick(deviceId))
-                            ?.info
-                            ?.name
-                            ?.ifEmpty {
-                                getState()
-                                    .accountList
-                                    .getOrNull(deviceAccountPick(deviceId))
-                                    ?.account
-                                    ?.phone
-                                    .orEmpty()
-                            }.orEmpty()
-                    onToast("已使用账号${name.ifEmpty { "备用" }}停止设备")
+                    onToast("已使用账号${accountDisplayName(usedAuth.accountIndex).ifEmpty { "备用" }}停止设备")
                 }
                 syncRunning(deviceId, deviceName, starting)
-                // 轮询至 geneStatus 变化：第一轮 5×2.5s 快查，未变再第二轮 25×5s 慢查
-                var newStatus: DevStatusResult? = null
-                var remaining = 5
-                var stepMs = 2500L
-                while (remaining > 0) {
-                    remaining--
-                    delay(stepMs.milliseconds)
-                    if (!isCurrentToken(usedAuth.token)) return@launch
-                    newStatus = api.getDevStatus(usedAuth.token, deviceId, usedAuth.appType)
-                    if (newStatus?.geneStatus != currentStatus?.geneStatus) break
-                    if (remaining == 0 && stepMs == 2500L) {
-                        stepMs = 5000L
-                        remaining = 25
-                    }
-                }
-                if (!isCurrentToken(usedAuth.token)) return@launch
+                val newStatus = pollStatusChange(deviceId, usedAuth, currentStatus) ?: return@launch
                 setState { state ->
                     state.copy(
                         devices =
                             state.devices.map {
                                 if (it.id == deviceId) {
                                     it.copy(
-                                        geneStatus = newStatus?.geneStatus ?: it.geneStatus,
-                                        deviceStatus = newStatus?.deviceStatus ?: it.deviceStatus,
+                                        geneStatus = newStatus.geneStatus,
+                                        deviceStatus = newStatus.deviceStatus,
                                     )
                                 } else {
                                     it
@@ -796,23 +733,18 @@ class DeviceController(
                     )
                 }
                 // 详情页同步最新状态与会话结束时间（gene.time 用于“剩余X分钟”）
-                if (newStatus != null) {
-                    val status = newStatus
-                    val keepEndTime = deviceDetail?.geneEndTime ?: 0L
-                    deviceDetail =
-                        deviceDetail
-                            ?.takeIf { it.id == deviceId }
-                            ?.copy(
-                                geneStatus = status.geneStatus,
-                                deviceStatus = status.deviceStatus,
-                                geneEndTime = status.geneEndTime.takeIf { it > 0 } ?: keepEndTime,
-                            )
-                }
+                val keepEndTime = deviceDetail?.geneEndTime ?: 0L
+                deviceDetail =
+                    deviceDetail
+                        ?.takeIf { it.id == deviceId }
+                        ?.copy(
+                            geneStatus = newStatus.geneStatus,
+                            deviceStatus = newStatus.deviceStatus,
+                            geneEndTime = newStatus.geneEndTime.takeIf { it > 0 } ?: keepEndTime,
+                        )
                 // 启动后以轮询结果校正（停止在请求成功时已上报）
                 if (starting) {
-                    // starting=true 蕴含 currentStatus 非空，elvis 结果必非空
-                    val isRunning = (newStatus ?: currentStatus).geneStatus != 99
-                    syncRunning(deviceId, deviceName, isRunning)
+                    syncRunning(deviceId, deviceName, newStatus.geneStatus != 99)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -823,6 +755,112 @@ class DeviceController(
                 if (startingDeviceId == deviceId) startingDeviceId = null
             }
         }
+    }
+
+    // 启动设备：同步积分抵扣开关后优先钱袋支付（91），失败再换支付宝免密（21）
+    private suspend fun startDevice(
+        auth: DeviceAuth,
+        deviceId: String,
+        args: String,
+    ): DevResult {
+        requestNotificationPermission()
+        // 启动前把积分抵扣开关同步到服务端，保证开关与实际扣款方式一致
+        api.setUseScore(auth.token, value = if (autoDeduct) 1 else 0, appType = auth.appType)
+        val wallet =
+            api.devStart(
+                auth.token,
+                deviceId,
+                auth.appType,
+                ptype = PAY_TYPE_WALLET,
+                args = args,
+                reportError = false,
+            )
+        if (wallet.success) return wallet
+        return api.devStart(auth.token, deviceId, auth.appType, ptype = PAY_TYPE_ALIPAY, args = args)
+    }
+
+    /**
+     * 停止结果。[usedAuth] 是最终生效的账号，未必等于首次尝试的 [auth]；
+     * 调用方据它判断是否发生了回退，并把后续轮询与状态写入切到该账号。
+     */
+    private data class StopOutcome(
+        val result: DevResult,
+        val usedAuth: DeviceAuth,
+    )
+
+    /**
+     * 按优先级逐个账号尝试停止：[auth] → 当前登录账号 → 其余有设备权限的账号。
+     *
+     * 设备可能由别的账号启动，所以一路回退到任一可用账号，避免"明明有账号能停却停不掉"。
+     * 每次尝试都带 reportError = false，只在全部失败时提示一次，不刷屏。
+     */
+    private suspend fun stopDeviceWithFallback(
+        auth: DeviceAuth,
+        deviceId: String,
+    ): StopOutcome {
+        val candidates = stopCandidates(auth)
+        var lastMessage = ""
+        candidates.forEachIndexed { index, candidate ->
+            val result = api.devEnd(candidate.token, deviceId, candidate.appType, reportError = false)
+            if (result.success) return StopOutcome(result, candidate)
+            if (index == 0) lastMessage = result.message
+            if (lastMessage.isEmpty()) lastMessage = result.message
+        }
+        if (lastMessage.isNotEmpty()) onToast(lastMessage)
+        return StopOutcome(DevResult(false, -1, lastMessage), auth)
+    }
+
+    /**
+     * 停止时的账号尝试顺序，已去重：
+     * 1. 当前选择的账号（[primary]）；
+     * 2. 当前登录账号；
+     * 3. 其余拥有设备控制凭据的账号。
+     */
+    private fun stopCandidates(primary: DeviceAuth): List<DeviceAuth> {
+        val list = getState().accountList
+        val ordered = mutableListOf(primary)
+        val current = getState().currentAccountIndex
+        if (current in list.indices) {
+            deviceAuthOf(current)?.let { currentAuth ->
+                if (ordered.none { it.token == currentAuth.token }) ordered += currentAuth
+            }
+        }
+        list.indices.forEach { index ->
+            val candidate = deviceAuthOf(index) ?: return@forEach
+            if (ordered.none { it.token == candidate.token }) ordered += candidate
+        }
+        return ordered
+    }
+
+    // 轮询至 geneStatus 变化：第一轮 5×2.5s 快查，未变再第二轮 25×5s 慢查。
+    // 账号被切走时返回 null，调用方直接结束整段流程。
+    private suspend fun pollStatusChange(
+        deviceId: String,
+        auth: DeviceAuth,
+        baseline: DevStatusResult?,
+    ): DevStatusResult? {
+        var newStatus: DevStatusResult? = null
+        var remaining = 5
+        var stepMs = 2500L
+        while (remaining > 0) {
+            remaining--
+            delay(stepMs.milliseconds)
+            if (!isCurrentToken(auth.token)) return null
+            newStatus = api.getDevStatus(auth.token, deviceId, auth.appType)
+            if (newStatus?.geneStatus != baseline?.geneStatus) break
+            if (remaining == 0 && stepMs == 2500L) {
+                stepMs = 5000L
+                remaining = 25
+            }
+        }
+        if (!isCurrentToken(auth.token)) return null
+        return newStatus
+    }
+
+    // 账号显示名，优先昵称，其次手机号
+    private fun accountDisplayName(index: Int): String {
+        val entry = getState().accountList.getOrNull(index) ?: return ""
+        return entry.info.name.ifEmpty { entry.account.phone }
     }
 
     // 运行通知与后台监控开关同步（启动请求成功后乐观上报 + 状态轮询校正共用）
