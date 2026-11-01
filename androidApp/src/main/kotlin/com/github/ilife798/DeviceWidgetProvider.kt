@@ -141,6 +141,8 @@ class DeviceWidgetProvider : AppWidgetProvider() {
         ): RemoteViews {
             val store = DeviceWidgetStore(context)
             if (previewKey != null) return cardViews(context, widgetId, previewKey, 0, 1)
+            val (width, height) = widgetSize(context, widgetId)
+            val density = context.resources.displayMetrics.density
             val entries = store.collection(widgetId)
             val mutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
             val start =
@@ -159,6 +161,15 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )
             return RemoteViews(context.packageName, R.layout.widget_device_deck).apply {
+                // 抵消 StackView 固定预留的 10% 透视空间，让当前卡片铺满裁剪窗口。
+                // 内部高亮边框每侧为 4dp；右侧再多留一侧，避免后卡从边缘露出。
+                setViewPadding(
+                    R.id.widget_stack,
+                    0,
+                    -(((height - 44) * 0.1f + 4) * density).toInt(),
+                    -(((width - 20) * 0.1f + 8) * density).toInt(),
+                    0,
+                )
                 val adapter =
                     Intent(context, DeviceWidgetCollectionService::class.java)
                         .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
@@ -193,22 +204,12 @@ class DeviceWidgetProvider : AppWidgetProvider() {
 
         internal fun itemId(key: String): Long = key.fold(1125899906842597L) { hash, char -> hash * 31 + char.code }
 
-        internal fun cardViews(
+        private fun widgetSize(
             context: Context,
             widgetId: Int,
-            key: String,
-            position: Int,
-            count: Int,
-        ): RemoteViews {
-            val store = DeviceWidgetStore(context)
-            val snapshot = store.get(key)
-            val entry = snapshot?.entry
-            val action = if (entry != null) store.action(widgetId, key) else null
-            val busy = action?.optBoolean("busy") == true
+        ): Pair<Int, Int> {
             val options =
-                if (widgetId ==
-                    AppWidgetManager.INVALID_APPWIDGET_ID
-                ) {
+                if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
                     Bundle()
                 } else {
                     AppWidgetManager.getInstance(context).getAppWidgetOptions(widgetId)
@@ -224,9 +225,23 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                     if (portrait) AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT else AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
                     180,
                 )
-            // StackView 对子卡片采用 AT_MOST 测量；明确卡片尺寸，避免按文本缩成小卡片。
-            val cardWidth = ((width - 20) * 0.9f - 8).coerceAtLeast(140f)
-            val cardHeight = ((height - 44) * 0.9f - 8).coerceAtLeast(72f)
+            return width to height
+        }
+
+        internal fun cardViews(
+            context: Context,
+            widgetId: Int,
+            key: String,
+            position: Int,
+            count: Int,
+        ): RemoteViews {
+            val store = DeviceWidgetStore(context)
+            val snapshot = store.get(key)
+            val entry = snapshot?.entry
+            val action = if (entry != null) store.action(widgetId, key) else null
+            val busy = action?.optBoolean("busy") == true
+            val (width, height) = widgetSize(context, widgetId)
+            val cardHeight = (height - 48).coerceAtLeast(72)
             val compact = cardHeight < 130
             val status = action?.optString("message") ?: entry?.status ?: context.getString(R.string.device_widget_logged_out)
             val warning = listOf("失败", "异常", "超时", "离线", "禁用", "失效", "不可用", "退出", "无法", "请").any { it in status }
@@ -265,8 +280,10 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                 setViewVisibility(R.id.widget_progress, if (busy) View.VISIBLE else View.GONE)
                 val padding = dp(if (compact) 6 else 14)
                 setViewPadding(R.id.widget_card_root, padding, padding, padding, padding)
-                setInt(R.id.widget_card_root, "setMinimumWidth", dp(cardWidth.toInt()))
-                setInt(R.id.widget_card_root, "setMinimumHeight", dp(cardHeight.toInt()))
+                // 子卡片由 AT_MOST 限制到窗口大小；较大的最小尺寸确保短文本也铺满，
+                // 防止框架扩大后卡间距，也保证当前不透明背景遮住后卡的文字与按钮。
+                setInt(R.id.widget_card_root, "setMinimumWidth", dp(width))
+                setInt(R.id.widget_card_root, "setMinimumHeight", dp(height))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val size = if (compact) 44f else 64f
                     setViewLayoutWidth(R.id.widget_open, size, android.util.TypedValue.COMPLEX_UNIT_DIP)
