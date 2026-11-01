@@ -60,7 +60,7 @@ class DeviceWidgetConfigureActivity : Activity() {
                     val key = store.key(entries[position].entry.target)
                     if (store.get(key) != null) {
                         store.bind(widgetId, key)
-                        DeviceWidgetProvider.update(this@DeviceWidgetConfigureActivity, widgetId)
+                        DeviceWidgetProvider.update(this@DeviceWidgetConfigureActivity, widgetId, resetSelection = true)
                         setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
                         finish()
                     }

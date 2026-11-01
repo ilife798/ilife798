@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="widget_background">#F3F8F7</color>
-    <color name="widget_foreground">#172D29</color>
-    <color name="widget_secondary">#647B75</color>
-    <color name="widget_accent">#287D68</color>
-    <color name="widget_border">#DCEBE6</color>
+    <color name="widget_background">#142C30</color>
+    <color name="widget_background_end">#203F40</color>
+    <color name="widget_foreground">#F4F8F2</color>
+    <color name="widget_secondary">#A5BBB5</color>
+    <color name="widget_accent">#C5F1BE</color>
+    <color name="widget_border">#2A4645</color>
+    <color name="widget_surface">#1A3436</color>
+    <color name="widget_control_ink">#173B31</color>
+    <color name="widget_warning">#FFD09B</color>
 </resources>

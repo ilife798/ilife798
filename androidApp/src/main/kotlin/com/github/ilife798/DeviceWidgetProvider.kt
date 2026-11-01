@@ -18,6 +18,7 @@ private const val ACTION_WIDGET_PINNED = "com.github.ilife798.action.WIDGET_PINN
 private const val EXTRA_WIDGET_KEY = "com.github.ilife798.extra.WIDGET_KEY"
 private const val EXTRA_START_ARGS = "com.github.ilife798.extra.WIDGET_START_ARGS"
 private const val EXTRA_AUTO_DEDUCT = "com.github.ilife798.extra.WIDGET_AUTO_DEDUCT"
+internal const val EXTRA_WIDGET_TARGET = "com.github.ilife798.extra.WIDGET_TARGET"
 
 class AndroidDeviceWidgetController(
     private val context: Context,
@@ -68,6 +69,15 @@ class AndroidDeviceWidgetController(
 }
 
 class DeviceWidgetProvider : AppWidgetProvider() {
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        update(context, appWidgetId)
+    }
+
     override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
@@ -90,7 +100,7 @@ class DeviceWidgetProvider : AppWidgetProvider() {
         // 用户确认系统弹窗之前可能已经退出对应账号。
         if (store.get(key) == null) return
         store.bind(id, key, intent.getStringExtra(EXTRA_START_ARGS), intent.getBooleanExtra(EXTRA_AUTO_DEDUCT, true))
-        update(context, id)
+        update(context, id, resetSelection = true)
     }
 
     override fun onDeleted(
@@ -106,98 +116,168 @@ class DeviceWidgetProvider : AppWidgetProvider() {
             manager.getAppWidgetIds(ComponentName(context, DeviceWidgetProvider::class.java)).forEach { update(context, it) }
         }
 
+        @Suppress("DEPRECATION")
         fun update(
             context: Context,
             widgetId: Int,
+            resetSelection: Boolean = false,
         ) {
-            AppWidgetManager.getInstance(context).updateAppWidget(widgetId, views(context, widgetId))
+            // 新版系统会异步绑定集合服务，使用应用上下文避免随短期启动服务销毁而解绑。
+            val appContext = context.applicationContext
+            val manager = AppWidgetManager.getInstance(appContext)
+            val views = views(appContext, widgetId)
+            if (resetSelection) views.setDisplayedChild(R.id.widget_stack, 0)
+            manager.updateAppWidget(widgetId, views)
+            run {
+                manager.notifyAppWidgetViewDataChanged(widgetId, R.id.widget_stack)
+            }
         }
 
+        @Suppress("DEPRECATION")
         internal fun views(
             context: Context,
             widgetId: Int,
             previewKey: String? = null,
         ): RemoteViews {
             val store = DeviceWidgetStore(context)
-            val key = previewKey ?: store.binding(widgetId)
-            val snapshot = key?.let { store.get(it) }
-            val entry = snapshot?.entry
-            val action = if (entry != null) store.action(widgetId) else null
-            val busy = action?.optBoolean("busy") == true
-            return RemoteViews(context.packageName, R.layout.widget_device).apply {
-                setTextViewText(R.id.widget_account, entry?.accountLabel ?: context.getString(R.string.device_widget_label))
-                setTextViewText(R.id.widget_name, entry?.name ?: context.getString(R.string.device_widget_choose))
-                setTextViewText(
-                    R.id.widget_status,
-                    action?.optString("message") ?: entry?.status ?: context.getString(
-                        if (key == null) R.string.device_widget_not_configured else R.string.device_widget_logged_out,
+            if (previewKey != null) return cardViews(context, widgetId, previewKey, 0, 1)
+            val entries = store.collection(widgetId)
+            val mutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+            val start =
+                Intent(context, DeviceWidgetStartService::class.java)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                    .setData(Uri.parse("ilife798-widget://deck-start/$widgetId"))
+            val configure =
+                Intent(context, DeviceWidgetConfigureActivity::class.java)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                    .setData(Uri.parse("ilife798-widget://configure/$widgetId"))
+            val settings =
+                PendingIntent.getActivity(
+                    context,
+                    widgetId,
+                    configure,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            return RemoteViews(context.packageName, R.layout.widget_device_deck).apply {
+                val adapter =
+                    Intent(context, DeviceWidgetCollectionService::class.java)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                        .setData(Uri.parse("ilife798-widget://deck-data/$widgetId"))
+                setRemoteAdapter(R.id.widget_stack, adapter)
+                setEmptyView(R.id.widget_stack, R.id.widget_empty)
+                setPendingIntentTemplate(
+                    R.id.widget_stack,
+                    PendingIntent.getForegroundService(
+                        context,
+                        widgetId,
+                        start,
+                        PendingIntent.FLAG_UPDATE_CURRENT or mutable,
                     ),
                 )
+                setOnClickPendingIntent(R.id.widget_settings, settings)
+                setOnClickPendingIntent(R.id.widget_empty, settings)
+                setTextViewText(
+                    R.id.widget_empty,
+                    context.getString(
+                        if (store.binding(widgetId) ==
+                            null
+                        ) {
+                            R.string.device_widget_choose
+                        } else {
+                            R.string.device_widget_logged_out
+                        },
+                    ),
+                )
+            }
+        }
+
+        internal fun itemId(key: String): Long = key.fold(1125899906842597L) { hash, char -> hash * 31 + char.code }
+
+        internal fun cardViews(
+            context: Context,
+            widgetId: Int,
+            key: String,
+            position: Int,
+            count: Int,
+        ): RemoteViews {
+            val store = DeviceWidgetStore(context)
+            val snapshot = store.get(key)
+            val entry = snapshot?.entry
+            val action = if (entry != null) store.action(widgetId, key) else null
+            val busy = action?.optBoolean("busy") == true
+            val options =
+                if (widgetId ==
+                    AppWidgetManager.INVALID_APPWIDGET_ID
+                ) {
+                    Bundle()
+                } else {
+                    AppWidgetManager.getInstance(context).getAppWidgetOptions(widgetId)
+                }
+            val portrait = context.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val width =
+                options.getInt(
+                    if (portrait) AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH else AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
+                    300,
+                )
+            val height =
+                options.getInt(
+                    if (portrait) AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT else AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
+                    180,
+                )
+            // StackView 对子卡片采用 AT_MOST 测量；明确卡片尺寸，避免按文本缩成小卡片。
+            val cardWidth = ((width - 20) * 0.9f - 8).coerceAtLeast(140f)
+            val cardHeight = ((height - 44) * 0.9f - 8).coerceAtLeast(72f)
+            val compact = cardHeight < 130
+            val status = action?.optString("message") ?: entry?.status ?: context.getString(R.string.device_widget_logged_out)
+            val warning = listOf("失败", "异常", "超时", "离线", "禁用", "失效", "不可用", "退出", "无法", "请").any { it in status }
+            val color = context.getColor(if (warning) R.color.widget_warning else R.color.widget_accent)
+
+            fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+            return RemoteViews(context.packageName, R.layout.widget_card).apply {
+                setTextViewText(R.id.widget_account, entry?.accountLabel ?: context.getString(R.string.device_widget_label))
+                setTextViewText(R.id.widget_name, entry?.name ?: context.getString(R.string.device_widget_choose))
+                setTextViewText(R.id.widget_position, "${position + 1} / $count")
+                setTextViewText(R.id.widget_status, status)
+                setContentDescription(R.id.widget_status, status)
+                setTextColor(R.id.widget_status, color)
+                setTextColor(R.id.widget_status_dot, color)
                 setTextViewText(
                     R.id.widget_updated,
-                    action?.let { context.getString(R.string.device_widget_operated, DateFormat.format("MM-dd HH:mm", it.optLong("at"))) }
-                        ?: snapshot?.let { context.getString(R.string.device_widget_synced, DateFormat.format("MM-dd HH:mm", it.syncedAt)) }
+                    action?.let { context.getString(R.string.device_widget_operated, DateFormat.format("HH:mm", it.optLong("at"))) }
+                        ?: snapshot?.let { context.getString(R.string.device_widget_synced, DateFormat.format("HH:mm", it.syncedAt)) }
                         ?: context.getString(R.string.device_widget_configure_hint),
                 )
                 setTextViewText(
                     R.id.widget_open,
                     if (busy) {
-                        "启动中…"
+                        "处理中"
+                    } else if (compact) {
+                        "启动"
                     } else {
-                        context.getString(
-                            if (entry ==
-                                null
-                            ) {
-                                R.string.device_widget_choose_action
-                            } else {
-                                R.string.device_widget_open
-                            },
-                        )
+                        context.getString(R.string.device_widget_open)
                     },
                 )
+                setTextViewTextSize(R.id.widget_name, android.util.TypedValue.COMPLEX_UNIT_SP, if (compact) 16f else 20f)
+                setTextViewTextSize(R.id.widget_account, android.util.TypedValue.COMPLEX_UNIT_SP, if (compact) 9f else 10f)
+                setInt(R.id.widget_name, "setMaxLines", if (compact) 1 else 2)
+                setInt(R.id.widget_status, "setMaxLines", if (compact) 1 else 2)
+                setViewVisibility(R.id.widget_updated, View.VISIBLE)
                 setViewVisibility(R.id.widget_progress, if (busy) View.VISIBLE else View.GONE)
-                val click =
-                    if (entry != null) {
-                        Intent(context, DeviceWidgetStartService::class.java)
-                            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
-                    } else {
-                        Intent(context, DeviceWidgetConfigureActivity::class.java)
-                            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
-                    }
-                click.data = Uri.parse("ilife798-widget://start/$widgetId")
-                setOnClickPendingIntent(
-                    R.id.widget_root,
-                    if (entry !=
-                        null
-                    ) {
-                        PendingIntent.getForegroundService(
-                            context,
-                            widgetId,
-                            click,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                        )
-                    } else {
-                        PendingIntent.getActivity(
-                            context,
-                            widgetId,
-                            click,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                        )
-                    },
+                val padding = dp(if (compact) 6 else 14)
+                setViewPadding(R.id.widget_card_root, padding, padding, padding, padding)
+                setInt(R.id.widget_card_root, "setMinimumWidth", dp(cardWidth.toInt()))
+                setInt(R.id.widget_card_root, "setMinimumHeight", dp(cardHeight.toInt()))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val size = if (compact) 44f else 64f
+                    setViewLayoutWidth(R.id.widget_open, size, android.util.TypedValue.COMPLEX_UNIT_DIP)
+                    setViewLayoutHeight(R.id.widget_open, size, android.util.TypedValue.COMPLEX_UNIT_DIP)
+                }
+                setViewPadding(R.id.widget_open, dp(3), dp(if (compact) 2 else 10), dp(3), dp(if (compact) 2 else 8))
+                setContentDescription(
+                    R.id.widget_open,
+                    if (busy) "正在启动 ${entry?.name.orEmpty()}" else "使用${entry?.accountLabel.orEmpty()}启动${entry?.name.orEmpty()}",
                 )
-                val configure =
-                    Intent(context, DeviceWidgetConfigureActivity::class.java)
-                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
-                        .setData(Uri.parse("ilife798-widget://configure/$widgetId"))
-                setOnClickPendingIntent(
-                    R.id.widget_settings,
-                    PendingIntent.getActivity(
-                        context,
-                        widgetId,
-                        configure,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                    ),
-                )
+                if (entry != null) setOnClickFillInIntent(R.id.widget_open, Intent().putExtra(EXTRA_WIDGET_TARGET, key))
             }
         }
     }

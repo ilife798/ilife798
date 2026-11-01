@@ -114,6 +114,16 @@ internal class DeviceWidgetStore(
 
     fun binding(widgetId: Int): String? = prefs.getString("binding_$widgetId", null)
 
+    fun collection(widgetId: Int): List<StoredDeviceWidget> {
+        val first = binding(widgetId) ?: return emptyList()
+        if (get(first) == null) return emptyList()
+        return entries().sortedWith(
+            compareBy({
+                key(it.entry.target) != first
+            }, { it.entry.accountLabel }, { it.entry.name }, { key(it.entry.target) }),
+        )
+    }
+
     fun bind(
         widgetId: Int,
         key: String,
@@ -131,9 +141,16 @@ internal class DeviceWidgetStore(
             .apply()
     }
 
-    fun startArgs(widgetId: Int): String? = prefs.getString("args_$widgetId", null)
+    fun startArgs(
+        widgetId: Int,
+        targetKey: String = binding(widgetId).orEmpty(),
+    ): String? = if (targetKey == binding(widgetId)) prefs.getString("args_$widgetId", null) else get(targetKey)?.entry?.startArgs
 
-    fun autoDeduct(widgetId: Int): Boolean = prefs.getBoolean("deduct_$widgetId", true)
+    fun autoDeduct(
+        widgetId: Int,
+        targetKey: String = binding(widgetId).orEmpty(),
+    ): Boolean =
+        if (targetKey == binding(widgetId)) prefs.getBoolean("deduct_$widgetId", true) else get(targetKey)?.entry?.autoDeduct ?: true
 
     fun recentlyStarted(deviceId: String): Boolean = System.currentTimeMillis() - prefs.getLong("attempt_$deviceId", 0L) < 60_000
 
@@ -141,20 +158,28 @@ internal class DeviceWidgetStore(
         prefs.edit().putLong("attempt_$deviceId", System.currentTimeMillis()).commit()
     }
 
-    fun action(widgetId: Int): JSONObject? =
+    fun action(
+        widgetId: Int,
+        targetKey: String,
+    ): JSONObject? =
         runCatching {
-            JSONObject(prefs.getString("action_$widgetId", "") ?: "").takeIf { System.currentTimeMillis() - it.optLong("at") < 120_000 }
+            JSONObject(prefs.getString("action_${widgetId}_${Uri.encode(targetKey)}", "") ?: "").takeIf {
+                System.currentTimeMillis() -
+                    it.optLong("at") <
+                    120_000
+            }
         }.getOrNull()
 
     fun setAction(
         widgetId: Int,
         message: String,
         busy: Boolean,
+        targetKey: String,
     ) {
         prefs
             .edit()
             .putString(
-                "action_$widgetId",
+                "action_${widgetId}_${Uri.encode(targetKey)}",
                 JSONObject()
                     .put("message", message)
                     .put("busy", busy)
@@ -170,6 +195,10 @@ internal class DeviceWidgetStore(
                 remove("args_$it")
                 remove("deduct_$it")
                 remove("action_$it")
+                val prefix = "action_${it}_"
+                prefs.all.keys
+                    .filter { key -> key.startsWith(prefix) }
+                    .forEach { key -> remove(key) }
             }
             apply()
         }

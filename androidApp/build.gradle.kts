@@ -50,16 +50,8 @@ android {
         applicationId = "com.github.ilife798"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
-        versionName = "1.3.12"
-
-        val updateRepository =
-            System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() }
-                ?: localProps.getProperty("update.repository", "ilife798/ilife798")
-        require(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(updateRepository)) {
-            "Invalid update repository"
-        }
-        buildConfigField("String", "UPDATE_REPOSITORY", "\"$updateRepository\"")
+        versionCode = 20
+        versionName = "1.3.13"
 
         buildConfigField("String", "API_GATEWAY", "\"${resolveBuildSecret("API_GATEWAY", "API_GATEWAY")}\"")
         buildConfigField("String", "SIGN_SALT", "\"${resolveBuildSecret("SIGN_SALT", "SIGN_SALT")}\"")

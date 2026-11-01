@@ -23,6 +23,8 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -30,7 +32,8 @@ import org.json.JSONObject
 /** 桌面点击直接执行；不创建 Activity，也不依赖当前打开的账号或 ViewModel。 */
 class DeviceWidgetStartService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val active = mutableMapOf<String, MutableSet<Int>>()
+    private val active = mutableMapOf<String, Pair<Int, String>>()
+    private val accountLocks = mutableMapOf<String, Mutex>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,40 +56,44 @@ class DeviceWidgetStartService : Service() {
         )
         val id = intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
         val store = DeviceWidgetStore(this)
-        val key = store.binding(id).orEmpty()
+        val key = intent?.getStringExtra(EXTRA_WIDGET_TARGET) ?: store.binding(id).orEmpty()
         val entry = store.get(key)?.entry
-        if (entry == null) {
+        if (entry == null || store.collection(id).none { store.key(it.entry.target) == key }) {
             if (active.isEmpty()) stopSelf()
             return START_NOT_STICKY
         }
-        store.setAction(id, "启动中…", true)
-        DeviceWidgetProvider.update(this, id)
         // 按物理设备去重：同一设备的多个组件、多个账号也不会重复发送启动请求。
         active[entry.target.deviceId]?.let {
-            it.add(id)
+            if (it != (id to key)) {
+                store.setAction(id, "该设备正在处理，请稍后查看", false, key)
+                DeviceWidgetProvider.update(this, id)
+            }
             return START_NOT_STICKY
         }
-        active[entry.target.deviceId] = mutableSetOf(id)
+        active[entry.target.deviceId] = id to key
+        store.setAction(id, "启动中…", true, key)
+        DeviceWidgetProvider.update(this, id)
+        val accountLock = accountLocks.getOrPut(entry.target.accountKey) { Mutex() }
         scope.launch {
             var message = "操作中断，请确认设备状态"
             try {
-                message = withTimeout(110_000) { withContext(Dispatchers.IO) { start(id, key, entry) } }
+                message = withTimeout(110_000) { accountLock.withLock { withContext(Dispatchers.IO) { start(id, key, entry) } } }
             } catch (_: TimeoutCancellationException) {
                 message = "请求超时，请确认设备状态后再操作"
             } catch (e: WidgetStartFailure) {
                 message = e.message ?: "启动失败"
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // 只记录异常类型与代码位置，避免把请求参数和账户凭据写入日志。
+                android.util.Log.w("DeviceWidget", "Start failed: ${e.javaClass.simpleName} at ${e.stackTrace.firstOrNull()}")
                 // 网络中断时启动可能已经生效；绝不自动重试这类请求。
                 message = "网络异常，请确认设备状态后再操作"
             } finally {
-                active.remove(entry.target.deviceId).orEmpty().forEach { widgetId ->
-                    val bound = store.binding(widgetId)?.let { store.get(it)?.entry }
-                    if (bound?.target?.deviceId == entry.target.deviceId) {
-                        store.setAction(widgetId, message, false)
-                        DeviceWidgetProvider.update(this@DeviceWidgetStartService, widgetId)
-                    }
+                active.remove(entry.target.deviceId)
+                if (store.collection(id).any { store.key(it.entry.target) == key }) {
+                    store.setAction(id, message, false, key)
+                    DeviceWidgetProvider.update(this@DeviceWidgetStartService, id)
                 }
                 Toast.makeText(this@DeviceWidgetStartService, message, Toast.LENGTH_LONG).show()
                 if (active.isEmpty()) stopSelf()
@@ -107,7 +114,11 @@ class DeviceWidgetStartService : Service() {
         val auth = account(entry.target.accountKey)
 
         fun checkBinding() {
-            if (store.binding(id) != key || AppWidgetManager.getInstance(this).getAppWidgetInfo(id) == null) fail("小组件配置已变化，请重新操作")
+            if (store.collection(id).none { store.key(it.entry.target) == key } ||
+                AppWidgetManager.getInstance(this).getAppWidgetInfo(id) == null
+            ) {
+                fail("小组件配置已变化，请重新操作")
+            }
             if (account(entry.target.accountKey).preferredToken != auth.preferredToken) fail("登录状态已变化，请重新操作")
         }
         val appType = if (auth.appToken.isNotBlank()) APP_TYPE_DEVICE else APP_TYPE_POINTS
@@ -119,7 +130,7 @@ class DeviceWidgetStartService : Service() {
             val detail =
                 api.getDeviceDetail(auth.preferredToken, entry.target.deviceId, appType)
                     ?: fail(if (expired) "登录已失效，请重新登录" else "无法读取设备信息，请稍后再试")
-            val configured = store.startArgs(id)
+            val configured = store.startArgs(id, key)
             if (configured == null && (detail.parts.isNotEmpty() || detail.subs.isNotEmpty() || detail.goods.isNotEmpty())) {
                 fail("请在设备详情选择模式或通道后重新添加组件")
             }
@@ -148,7 +159,7 @@ class DeviceWidgetStartService : Service() {
             if (status.geneStatus != 99) return "设备正在使用，未重复启动"
             if (store.recentlyStarted(entry.target.deviceId)) return "刚提交过启动，请确认设备状态后再操作"
             checkBinding()
-            val score = api.setUseScore(auth.preferredToken, if (store.autoDeduct(id)) 1 else 0, appType)
+            val score = api.setUseScore(auth.preferredToken, if (store.autoDeduct(id, key)) 1 else 0, appType)
             if (!score.success) fail(if (expired) "登录已失效，请重新登录" else score.message.ifBlank { "积分抵扣设置失败，未启动设备" })
             checkBinding()
             store.recordStart(entry.target.deviceId)

@@ -12,7 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.github.ilife798.data.api.ApiConfig
-import com.github.ilife798.update.AppUpdate
 import com.github.ilife798.update.onNotificationPermissionResult
 
 // NDEF payload 文本中嵌入的链接（绝对 URI 或以 /q/ 开头的路径）
@@ -27,7 +26,6 @@ class MainActivity : ComponentActivity() {
         AppStorage.instance = PersistentStorage(applicationContext)
         DeviceTile.controller = AndroidDeviceTileController(applicationContext)
         DeviceWidgets.controller = AndroidDeviceWidgetController(applicationContext)
-        AppUpdate.repository = BuildConfig.UPDATE_REPOSITORY
         ApiConfig.init(
             gateway = BuildConfig.API_GATEWAY,
             salt = BuildConfig.SIGN_SALT,

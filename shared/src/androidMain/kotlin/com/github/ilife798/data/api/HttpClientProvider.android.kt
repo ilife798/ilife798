@@ -13,9 +13,17 @@ import kotlinx.serialization.json.Json
 
 actual fun createHttpClient(): HttpClient = createAndroidHttpClient()
 
-internal fun createAndroidHttpClient(allowConnectionRetry: Boolean = true): HttpClient =
+internal fun createAndroidHttpClient(
+    allowConnectionRetry: Boolean = true,
+    pool: okhttp3.ConnectionPool? = null,
+): HttpClient =
     HttpClient(OkHttp) {
-        engine { config { retryOnConnectionFailure(allowConnectionRetry) } }
+        engine {
+            config {
+                retryOnConnectionFailure(allowConnectionRetry)
+                pool?.let { connectionPool(it) }
+            }
+        }
         install(ContentNegotiation) {
             json(
                 Json {

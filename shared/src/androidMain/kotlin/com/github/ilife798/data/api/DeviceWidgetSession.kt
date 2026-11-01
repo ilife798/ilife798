@@ -10,10 +10,15 @@ import kotlinx.serialization.json.Json
 
 /** 独立拥有网络客户端；启动请求关闭连接层自动重试。 */
 class DeviceWidgetSession {
-    private val client = createAndroidHttpClient(allowConnectionRetry = false)
+    // 与 App 中的长连接隔离，避免桌面操作拿到已经被服务端关闭的空闲连接。
+    private val pool = okhttp3.ConnectionPool()
+    private val client = createAndroidHttpClient(allowConnectionRetry = false, pool = pool)
     val api = IlifeApi(client)
 
-    fun close() = client.close()
+    fun close() {
+        client.close()
+        pool.evictAll()
+    }
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }

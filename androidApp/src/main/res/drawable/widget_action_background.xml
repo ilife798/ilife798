@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <solid android:color="@color/widget_accent" />
-    <corners android:radius="14dp" />
-</shape>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#28173B31">
+    <item>
+        <shape android:shape="oval">
+            <gradient android:angle="270" android:startColor="#D5F5BE" android:endColor="#A8E6C2" />
+        </shape>
+    </item>
+    <item android:id="@android:id/mask"><shape android:shape="oval"><solid android:color="#FFFFFF" /></shape></item>
+</ripple>
