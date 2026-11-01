@@ -251,7 +251,7 @@ fun LoginPage(
                 Button(
                     modifier = Modifier.width(120.dp),
                     onClick = {
-                        viewModel.sendSmsCode(phone.text, graphCode)
+                        viewModel.sendSmsCode(phone.text, graphCode, isAlipay)
                     },
                     enabled = phone.text.length == 11 && graphCode.isNotBlank() && smsCountdown <= 0,
                     colors = primaryButtonColors(dynamicColor),

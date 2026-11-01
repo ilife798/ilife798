@@ -36,6 +36,7 @@ import com.github.ilife798.data.model.deviceDisplayStatus
 import com.github.ilife798.data.viewmodel.AccountAssets
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.data.viewmodel.buildDeviceDetailStartArgs
+import com.github.ilife798.data.viewmodel.isDeviceChannelRequired
 import com.github.ilife798.showToast
 import com.github.ilife798.ui.component.AccountAvatar
 import com.github.ilife798.ui.component.BlurredTopAppBar
@@ -73,7 +74,6 @@ private const val DTYPE_CHARGING = 120
 private const val DTYPE_HAIR_DRIER = 20
 private const val SENSOR_MULTIPLE = 12
 private const val SENSOR_TIME_CTL = 13
-private const val HAIR_DRIER_FMV_BUILD = 311
 private const val GATEWAY_HAIER = 6
 
 // 固定程序类（洗/烘/鞋）：运行中仅展示状态，不允许手动结算，程序结束由服务端结算
@@ -85,20 +85,7 @@ internal fun isChannelRequired(
     subsCount: Int,
     sensors: List<Int>,
     fmv: String = "",
-): Boolean =
-    when (dtype) {
-        DTYPE_CHARGING -> subsCount > 0
-        DTYPE_HAIR_DRIER -> SENSOR_MULTIPLE in sensors && subsCount > 0 && fmvBuildOver(fmv)
-        else -> false
-    }
-
-// fmv 按 "." 分段取末段转数值，须大于 311；不可解析按 false
-private fun fmvBuildOver(fmv: String): Boolean =
-    fmv
-        .split(".")
-        .lastOrNull()
-        ?.toIntOrNull()
-        ?.let { it > HAIR_DRIER_FMV_BUILD } ?: false
+): Boolean = isDeviceChannelRequired(dtype, subsCount, sensors, fmv)
 
 // 支持的设备类型描述，其余走“设备”兜底
 private fun dtypeLabel(dtype: Int): String =

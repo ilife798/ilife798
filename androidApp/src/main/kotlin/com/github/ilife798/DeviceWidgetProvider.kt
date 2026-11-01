@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.text.format.DateFormat
 import android.view.View
 import android.widget.RemoteViews
+import org.json.JSONObject
 import java.util.UUID
 
 private const val ACTION_WIDGET_PINNED = "com.github.ilife798.action.WIDGET_PINNED"
@@ -160,6 +161,9 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                     configure,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )
+            val selection = store.activeSelection(widgetId)
+            if (selection != null) return selectionViews(context, widgetId, selection.first, selection.second, settings)
+            val focus = store.consumeFocus(widgetId)
             return RemoteViews(context.packageName, R.layout.widget_device_deck).apply {
                 // 抵消 StackView 固定预留的 10% 透视空间，让当前卡片铺满裁剪窗口。
                 // 内部高亮边框每侧为 4dp；右侧再多留一侧，避免后卡从边缘露出。
@@ -187,6 +191,10 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                 )
                 setOnClickPendingIntent(R.id.widget_settings, settings)
                 setOnClickPendingIntent(R.id.widget_empty, settings)
+                if (focus != null) {
+                    val index = entries.indexOfFirst { store.key(it.entry.target) == focus }
+                    if (index >= 0) setDisplayedChild(R.id.widget_stack, index)
+                }
                 setTextViewText(
                     R.id.widget_empty,
                     context.getString(
@@ -199,6 +207,61 @@ class DeviceWidgetProvider : AppWidgetProvider() {
                         },
                     ),
                 )
+            }
+        }
+
+        // StackView 将整张卡片作为一次点击分发；多选项放在集合之外，每项使用独立且不可变的 PendingIntent。
+        private fun selectionViews(
+            context: Context,
+            widgetId: Int,
+            key: String,
+            selection: JSONObject,
+            settings: PendingIntent,
+        ): RemoteViews {
+            fun click(
+                action: String,
+                value: Int? = null,
+            ): PendingIntent {
+                val intent =
+                    Intent(context, DeviceWidgetStartService::class.java)
+                        .setData(Uri.parse("ilife798-widget://select/$widgetId/${Uri.encode(key)}/${selection.getString("id")}/$action"))
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                        .putExtra(EXTRA_WIDGET_TARGET, key)
+                        .putExtra(EXTRA_WIDGET_SELECTION, selection.getString("id"))
+                if (value != null) intent.putExtra(EXTRA_WIDGET_CHOICE, value)
+                if (action == "more") intent.putExtra(EXTRA_WIDGET_MORE, true)
+                if (action == "cancel") intent.putExtra(EXTRA_WIDGET_CANCEL, true)
+                return PendingIntent.getForegroundService(
+                    context,
+                    widgetId,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
+            return RemoteViews(context.packageName, R.layout.widget_device_selection).apply {
+                setOnClickPendingIntent(R.id.widget_settings, settings)
+                setViewVisibility(R.id.widget_summary, View.GONE)
+                setViewVisibility(R.id.widget_choices_panel, View.VISIBLE)
+                setTextViewText(R.id.widget_choices_title, selection.getString("title"))
+                setTextViewText(R.id.widget_updated, "完成选择后启动 · 记住本次选择")
+                setTextViewText(R.id.widget_position, "")
+                removeAllViews(R.id.widget_choices)
+                val choices = selection.getJSONArray("choices")
+                val offset = selection.optInt("page") * 3
+                for (index in offset until minOf(offset + 3, choices.length())) {
+                    val option = choices.getJSONObject(index)
+                    val value = option.getInt("value")
+                    addView(
+                        R.id.widget_choices,
+                        RemoteViews(context.packageName, R.layout.widget_choice).apply {
+                            setTextViewText(R.id.widget_choice, option.getString("label"))
+                            setOnClickPendingIntent(R.id.widget_choice, click("value-$value", value))
+                        },
+                    )
+                }
+                setViewVisibility(R.id.widget_choices_next, if (choices.length() > 3) View.VISIBLE else View.GONE)
+                setOnClickPendingIntent(R.id.widget_choices_next, click("more"))
+                setOnClickPendingIntent(R.id.widget_choices_cancel, click("cancel"))
             }
         }
 

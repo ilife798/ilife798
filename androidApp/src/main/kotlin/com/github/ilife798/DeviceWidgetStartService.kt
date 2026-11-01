@@ -13,8 +13,11 @@ import com.github.ilife798.data.api.APP_TYPE_POINTS
 import com.github.ilife798.data.api.ApiConfig
 import com.github.ilife798.data.api.DeviceWidgetSession
 import com.github.ilife798.data.model.Account
+import com.github.ilife798.data.model.DeviceDisplayStatus
 import com.github.ilife798.data.model.deviceDisplayStatus
 import com.github.ilife798.data.viewmodel.buildDeviceDetailStartArgs
+import com.github.ilife798.data.viewmodel.isDeviceChannelRequired
+import com.github.ilife798.util.formatMoney
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +30,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
+
+internal const val EXTRA_WIDGET_CHOICE = "com.github.ilife798.extra.WIDGET_CHOICE"
+internal const val EXTRA_WIDGET_SELECTION = "com.github.ilife798.extra.WIDGET_SELECTION"
+internal const val EXTRA_WIDGET_MORE = "com.github.ilife798.extra.WIDGET_MORE"
+internal const val EXTRA_WIDGET_CANCEL = "com.github.ilife798.extra.WIDGET_CANCEL"
 
 /** 桌面点击直接执行；不创建 Activity，也不依赖当前打开的账号或 ViewModel。 */
 class DeviceWidgetStartService : Service() {
@@ -62,6 +72,28 @@ class DeviceWidgetStartService : Service() {
             if (active.isEmpty()) stopSelf()
             return START_NOT_STICKY
         }
+        val selectionId = intent?.getStringExtra(EXTRA_WIDGET_SELECTION)
+        if (intent?.getBooleanExtra(EXTRA_WIDGET_CANCEL, false) == true) {
+            val pending = store.selection(id, key)
+            if (pending == null || pending.optString("id") == selectionId) {
+                store.setSelection(id, key, null)
+                store.setAction(id, "已取消选择，未启动设备", false, key)
+                DeviceWidgetProvider.update(this, id)
+            }
+            if (active.isEmpty()) stopSelf()
+            return START_NOT_STICKY
+        }
+        if (intent?.getBooleanExtra(EXTRA_WIDGET_MORE, false) == true) {
+            store.selection(id, key)?.takeIf { it.optString("id") == selectionId }?.let {
+                val pages = (it.getJSONArray("choices").length() + 2) / 3
+                it.put("page", (it.optInt("page") + 1) % pages.coerceAtLeast(1))
+                store.setSelection(id, key, it)
+            }
+            DeviceWidgetProvider.update(this, id)
+            if (active.isEmpty()) stopSelf()
+            return START_NOT_STICKY
+        }
+        val choice = if (intent?.hasExtra(EXTRA_WIDGET_CHOICE) == true) intent.getIntExtra(EXTRA_WIDGET_CHOICE, -1) else null
         // 按物理设备去重：同一设备的多个组件、多个账号也不会重复发送启动请求。
         active[entry.target.deviceId]?.let {
             if (it != (id to key)) {
@@ -77,7 +109,10 @@ class DeviceWidgetStartService : Service() {
         scope.launch {
             var message = "操作中断，请确认设备状态"
             try {
-                message = withTimeout(110_000) { accountLock.withLock { withContext(Dispatchers.IO) { start(id, key, entry) } } }
+                message =
+                    withTimeout(
+                        110_000,
+                    ) { accountLock.withLock { withContext(Dispatchers.IO) { start(id, key, entry, selectionId, choice) } } }
             } catch (_: TimeoutCancellationException) {
                 message = "请求超时，请确认设备状态后再操作"
             } catch (e: WidgetStartFailure) {
@@ -108,8 +143,18 @@ class DeviceWidgetStartService : Service() {
         id: Int,
         key: String,
         entry: DeviceWidgetEntry,
+        selectionId: String?,
+        choice: Int?,
     ): String {
-        if (ApiConfig.baseUrl.isBlank()) ApiConfig.init(BuildConfig.API_GATEWAY, BuildConfig.SIGN_SALT, BuildConfig.API_CID)
+        if (ApiConfig.baseUrl.isBlank()) {
+            ApiConfig.init(
+                BuildConfig.API_GATEWAY,
+                BuildConfig.SIGN_SALT,
+                BuildConfig.API_CID,
+                BuildConfig.APP_SIGN_SALT,
+                BuildConfig.MINI_SIGN_SALT,
+            )
+        }
         val store = DeviceWidgetStore(this)
         val auth = account(entry.target.accountKey)
 
@@ -130,26 +175,6 @@ class DeviceWidgetStartService : Service() {
             val detail =
                 api.getDeviceDetail(auth.preferredToken, entry.target.deviceId, appType)
                     ?: fail(if (expired) "登录已失效，请重新登录" else "无法读取设备信息，请稍后再试")
-            val configured = store.startArgs(id, key)
-            if (configured == null && (detail.parts.isNotEmpty() || detail.subs.isNotEmpty() || detail.goods.isNotEmpty())) {
-                fail("请在设备详情选择模式或通道后重新添加组件")
-            }
-            val args =
-                configured
-                    ?: buildDeviceDetailStartArgs(
-                        detail.goods,
-                        null,
-                        -1,
-                        detail.dtype in setOf(20, 120),
-                        detail.dtype == 10 && detail.gtype != 6,
-                    )
-            val options = if (args.isBlank()) JSONObject() else JSONObject(args)
-            if (options.has("pos") && detail.subs.getOrNull(options.optInt("pos", -1))?.available != true) fail("所选通道不可用，请重新选择")
-            if (options.has("mode") && !options.isNull("mode") && options.optInt("mode", -1) >= 0 &&
-                detail.parts.none { it.mode == options.optInt("mode") }
-            ) {
-                fail("设备模式已变化，请重新选择")
-            }
             val status =
                 api.getDevStatus(auth.preferredToken, entry.target.deviceId, appType)
                     ?: fail(if (expired) "登录已失效，请重新登录" else "无法确认设备状态，未发送启动请求")
@@ -159,6 +184,97 @@ class DeviceWidgetStartService : Service() {
             if (status.geneStatus != 99) return "设备正在使用，未重复启动"
             if (store.recentlyStarted(entry.target.deviceId)) return "刚提交过启动，请确认设备状态后再操作"
             checkBinding()
+            val pending = store.selection(id, key)
+            val configured = store.startArgs(id, key).orEmpty()
+            val options =
+                if (choice != null) {
+                    if (pending == null || pending.optString("id") != selectionId) fail("选项已过期，请重新点击启动")
+                    val values = pending.getJSONArray("choices")
+                    if ((0 until values.length()).none { values.getJSONObject(it).getInt("value") == choice }) fail("选项已变化，请重新点击启动")
+                    JSONObject(pending.getJSONObject("args").toString()).put(pending.getString("kind"), choice)
+                } else if (configured.isBlank()) {
+                    JSONObject()
+                } else {
+                    JSONObject(configured)
+                }
+            store.setSelection(id, key, null)
+
+            fun select(
+                kind: String,
+                title: String,
+                values: List<Pair<Int, String>>,
+            ): String {
+                if (values.isEmpty()) fail("没有可用${if (kind == "mode") "模式" else "通道"}，未启动设备")
+                val choices = JSONArray()
+                values.forEach { (value, label) -> choices.put(JSONObject().put("value", value).put("label", label)) }
+                store.setSelection(
+                    id,
+                    key,
+                    JSONObject()
+                        .put("id", UUID.randomUUID().toString())
+                        .put("at", System.currentTimeMillis())
+                        .put("kind", kind)
+                        .put("title", title)
+                        .put("choices", choices)
+                        .put("args", options)
+                        .put("page", 0),
+                )
+                return title
+            }
+            val passage = detail.dtype in setOf(20, 120)
+            val modeRequired = if (passage) 13 in detail.sensors && detail.parts.isNotEmpty() else detail.parts.any { it.rate > 0.0 }
+            val channelRequired = isDeviceChannelRequired(detail.dtype, detail.subs.size, detail.sensors, detail.fmv)
+            if (detail.parts.isNotEmpty() && detail.parts.none { it.rate > 0.0 }) fail("未设置费率信息，无法启动")
+            var mode = if (options.has("mode") && !options.isNull("mode")) options.getInt("mode").takeIf { it >= 0 } else null
+            val staleMode = mode != null && detail.parts.none { it.mode == mode && it.rate > 0.0 }
+            if (staleMode) {
+                mode = null
+                options.remove("mode")
+            }
+            if (modeRequired && mode == null) {
+                val modes = detail.parts.filter { it.mode >= 0 && it.rate > 0.0 }.distinctBy { it.mode }
+                mode = modes.singleOrNull()?.takeUnless { staleMode }?.mode
+                if (mode == null) {
+                    return select(
+                        "mode",
+                        "${entry.name} · 请选择模式",
+                        modes.map {
+                            it.mode to
+                                "${it.name.ifBlank { "模式 ${it.mode}" }} · ¥${formatMoney(it.rate)}"
+                        },
+                    )
+                }
+                options.put("mode", mode)
+            }
+            var pos = options.optInt("pos", -1)
+            val staleChannel = pos >= 0 && detail.subs.getOrNull(pos)?.available != true
+            if (staleChannel) {
+                pos = -1
+                options.remove("pos")
+            }
+            if (channelRequired && pos < 0) {
+                val selected = detail.subs.withIndex().filter { it.value.isSelect && it.value.available }
+                pos =
+                    if (!staleChannel && selected.size == 1) {
+                        selected.single().index
+                    } else if (!staleChannel && detail.subs.size == 1 && detail.subs[0].available) {
+                        0
+                    } else {
+                        -1
+                    }
+                if (pos < 0) {
+                    return select(
+                        "pos",
+                        "${entry.name} · 请选择通道",
+                        detail.subs.withIndex().filter { it.value.available }.map {
+                            it.index to
+                                "通道 ${it.index + 1}"
+                        },
+                    )
+                }
+            }
+            val args = buildDeviceDetailStartArgs(detail.goods, mode, pos, passage, detail.dtype == 10 && detail.gtype != 6)
+            store.saveStartArgs(id, key, args)
             val score = api.setUseScore(auth.preferredToken, if (store.autoDeduct(id, key)) 1 else 0, appType)
             if (!score.success) fail(if (expired) "登录已失效，请重新登录" else score.message.ifBlank { "积分抵扣设置失败，未启动设备" })
             checkBinding()
@@ -175,17 +291,20 @@ class DeviceWidgetStartService : Service() {
             }
             if (!result.success) fail(if (expired) "登录已失效，请重新登录" else result.message.ifBlank { "设备启动失败" })
             // 请求成功与机器实际运行分开显示，状态查询失败也不重新发启动请求。
+            var starting = false
             repeat(5) {
                 delay(1_000)
                 val fresh = runCatching { api.getDevStatus(auth.preferredToken, entry.target.deviceId, appType) }.getOrNull()
                 if (fresh != null && fresh.deviceStatus != 0 &&
                     fresh.geneStatus !in setOf(98, 99)
                 ) {
-                    saveStatus(key, deviceDisplayStatus(fresh.deviceStatus, fresh.geneStatus, detail.dtype).label)
-                    return "启动成功 · ${deviceDisplayStatus(fresh.deviceStatus, fresh.geneStatus, detail.dtype).label}"
+                    val display = deviceDisplayStatus(fresh.deviceStatus, fresh.geneStatus, detail.dtype)
+                    saveStatus(key, display.label)
+                    if (display == DeviceDisplayStatus.Running) return "启动成功 · ${display.label}"
+                    starting = display == DeviceDisplayStatus.Starting
                 }
             }
-            return "启动请求已提交，请确认设备状态"
+            return if (starting) "启动请求已提交 · 启动中" else "启动请求已提交，请确认设备状态"
         } finally {
             session.close()
         }

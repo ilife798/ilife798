@@ -50,12 +50,14 @@ android {
         applicationId = "com.github.ilife798"
         minSdk = 26
         targetSdk = 37
-        versionCode = 21
-        versionName = "1.3.14"
+        versionCode = 22
+        versionName = "1.3.15"
 
         buildConfigField("String", "API_GATEWAY", "\"${resolveBuildSecret("API_GATEWAY", "API_GATEWAY")}\"")
         buildConfigField("String", "SIGN_SALT", "\"${resolveBuildSecret("SIGN_SALT", "SIGN_SALT")}\"")
         buildConfigField("String", "API_CID", "\"${resolveBuildSecret("API_CID", "API_CID")}\"")
+        buildConfigField("String", "APP_SIGN_SALT", "\"${resolveBuildSecret("APP_SIGN_SALT", "APP_SIGN_SALT")}\"")
+        buildConfigField("String", "MINI_SIGN_SALT", "\"${resolveBuildSecret("MINI_SIGN_SALT", "MINI_SIGN_SALT")}\"")
         // 微信兜底 appId：与官方一致，但只能通过编译时环境/密钥注入，仓库内不留明文。
         buildConfigField(
             "String",

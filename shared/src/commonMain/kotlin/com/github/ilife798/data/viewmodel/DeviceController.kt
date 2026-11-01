@@ -162,7 +162,7 @@ class DeviceController(
         scope.launch {
             try {
                 val wallet = api.getWalletOwner(auth.token)
-                val mission = api.getMissionList(auth.token)
+                val mission = api.getMissionList(auth.token, auth.appType == "1,1")
                 // 账号列表可能已变（切号/删除），下标失效则丢弃结果
                 val latest = deviceAuthOf(index)
                 val stillValid = latest != null && latest.token == auth.token && latest.appType == auth.appType

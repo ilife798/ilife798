@@ -136,7 +136,10 @@ internal class DeviceWidgetStore(
                 "binding_$widgetId",
                 key,
             ).putString("args_$widgetId", args)
+            .putString("startargs_${widgetId}_${Uri.encode(key)}", args)
             .putBoolean("deduct_$widgetId", autoDeduct)
+            .remove("selection_${widgetId}_${Uri.encode(key)}")
+            .remove("selection_target_$widgetId")
             .remove("action_$widgetId")
             .apply()
     }
@@ -144,7 +147,60 @@ internal class DeviceWidgetStore(
     fun startArgs(
         widgetId: Int,
         targetKey: String = binding(widgetId).orEmpty(),
-    ): String? = if (targetKey == binding(widgetId)) prefs.getString("args_$widgetId", null) else get(targetKey)?.entry?.startArgs
+    ): String? =
+        prefs.getString("startargs_${widgetId}_${Uri.encode(targetKey)}", null)
+            ?: (if (targetKey == binding(widgetId)) prefs.getString("args_$widgetId", null) else null)
+            ?: get(targetKey)?.entry?.startArgs
+
+    fun saveStartArgs(
+        widgetId: Int,
+        targetKey: String,
+        args: String,
+    ) {
+        prefs.edit().putString("startargs_${widgetId}_${Uri.encode(targetKey)}", args).apply()
+    }
+
+    fun selection(
+        widgetId: Int,
+        targetKey: String,
+    ): JSONObject? =
+        runCatching {
+            JSONObject(prefs.getString("selection_${widgetId}_${Uri.encode(targetKey)}", "") ?: "").takeIf {
+                System.currentTimeMillis() - it.optLong("at") in 0L..120_000L
+            }
+        }.getOrNull()
+
+    fun setSelection(
+        widgetId: Int,
+        targetKey: String,
+        selection: JSONObject?,
+    ) {
+        prefs.edit().putString("selection_${widgetId}_${Uri.encode(targetKey)}", selection?.toString()).apply {
+            if (selection != null) {
+                putString("selection_target_$widgetId", targetKey)
+                putString("selection_focus_$widgetId", targetKey)
+            } else if (prefs.getString("selection_target_$widgetId", null) == targetKey) {
+                remove("selection_target_$widgetId")
+            }
+            apply()
+        }
+    }
+
+    fun consumeFocus(widgetId: Int): String? {
+        val targetKey = prefs.getString("selection_focus_$widgetId", null)
+        prefs.edit().remove("selection_focus_$widgetId").apply()
+        return targetKey
+    }
+
+    fun activeSelection(widgetId: Int): Pair<String, JSONObject>? {
+        val targetKey = prefs.getString("selection_target_$widgetId", null) ?: return null
+        val bound = collection(widgetId).any { key(it.entry.target) == targetKey }
+        val busy = action(widgetId, targetKey)?.optBoolean("busy") == true
+        val pending = selection(widgetId, targetKey)
+        if (BuildConfig.DEBUG) android.util.Log.d("DeviceWidget", "Selection: bound=$bound busy=$busy valid=${pending != null}")
+        if (!bound || busy) return null
+        return pending?.let { targetKey to it }
+    }
 
     fun autoDeduct(
         widgetId: Int,
@@ -195,9 +251,11 @@ internal class DeviceWidgetStore(
                 remove("args_$it")
                 remove("deduct_$it")
                 remove("action_$it")
+                remove("selection_target_$it")
+                remove("selection_focus_$it")
                 val prefix = "action_${it}_"
                 prefs.all.keys
-                    .filter { key -> key.startsWith(prefix) }
+                    .filter { key -> key.startsWith(prefix) || key.startsWith("selection_${it}_") || key.startsWith("startargs_${it}_") }
                     .forEach { key -> remove(key) }
             }
             apply()

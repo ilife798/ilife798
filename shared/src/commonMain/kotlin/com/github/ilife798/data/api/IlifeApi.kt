@@ -9,6 +9,7 @@ import com.github.ilife798.data.model.DeviceOption
 import com.github.ilife798.data.model.DeviceSubState
 import com.github.ilife798.data.model.PayChannel
 import com.github.ilife798.data.model.PayChannelType
+import com.github.ilife798.data.model.PointsInfo
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.WalletAccount
@@ -25,6 +26,7 @@ import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.fromHttpToGmtDate
 import io.ktor.util.AttributeKey
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -81,6 +83,7 @@ class IlifeApi(
     ) {
         header("Authorization", token)
         header("ApplicationType", appType)
+        headers["VersionCode"] = if (appType == APP_TYPE_DEVICE) ApiConfig.VERSION_CODE else ApiConfig.MINI_LOGIN_VERSION
         attributes.put(requestAuthTokenKey, token)
     }
 
@@ -90,12 +93,31 @@ class IlifeApi(
 
     // 接口返回非 0 业务码时回调服务端错误信息，供上层直接以 Toast 展示
     var onApiError: ((String) -> Unit)? = null
+    private var appTimeOffsetMillis = 0L
+
+    private fun calibrateAppTime(response: HttpResponse) {
+        if (response.call.request.headers["ApplicationType"] != APP_TYPE_DEVICE) return
+        response.headers["Date"]?.let { date ->
+            runCatching { date.fromHttpToGmtDate().timestamp }.getOrNull()?.let {
+                appTimeOffsetMillis = it - currentTimeMillis()
+            }
+        }
+    }
+
+    private fun HttpRequestBuilder.scoreHeaders(
+        token: String,
+        isApp: Boolean,
+    ) {
+        apiHeaders(token, if (isApp) APP_TYPE_DEVICE else APP_TYPE_POINTS)
+        headers["VersionCode"] = if (isApp) ApiConfig.VERSION_CODE else ApiConfig.MINI_VERSION
+    }
 
     private suspend fun bodyJson(
         response: HttpResponse,
         notifyExpiry: Boolean = true,
         reportError: Boolean = true,
     ): JsonObject {
+        calibrateAppTime(response)
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
         if (notifyExpiry) {
             checkSessionExpired(
@@ -147,13 +169,17 @@ class IlifeApi(
         phone: String,
         graphCode: String,
         captchaKey: String,
+        isAlipay: Boolean = false,
     ): String =
         try {
             val response =
                 client.apiPost("acc/login/code") {
+                    header("ApplicationType", if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE)
+                    header("VersionCode", if (isAlipay) ApiConfig.MINI_LOGIN_VERSION else ApiConfig.VERSION_CODE)
                     contentType(ContentType.Application.Json)
                     setBody(requestJson.encodeToString(SmsCodeRequest(phone, graphCode, captchaKey)))
                 }
+            calibrateAppTime(response)
             response.bodyAsText()
         } catch (e: Exception) {
             """{"code":-1,"msg":"${e.message}"}"""
@@ -166,11 +192,21 @@ class IlifeApi(
     ): LoginResult {
         val appType = if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE
         val response =
-            client.apiPost("acc/login") {
+            client.apiPost(if (isAlipay) "acc/login" else "acc/login?sign=${Signer.login(phone, smsCode)}") {
                 contentType(ContentType.Application.Json)
-                setBody(requestJson.encodeToString(LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid)))
+                setBody(
+                    if (isAlipay) {
+                        requestJson.encodeToString(LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid))
+                    } else {
+                        JsonObject(
+                            mapOf("authCode" to JsonPrimitive(smsCode), "un" to JsonPrimitive(phone)),
+                        ).toString()
+                    },
+                )
                 header("ApplicationType", appType)
+                header("VersionCode", if (isAlipay) ApiConfig.MINI_LOGIN_VERSION else ApiConfig.VERSION_CODE)
             }
+        calibrateAppTime(response)
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
         val code = body.int("code", -1)
         if (code != 0) return LoginResult(false, error = body.str("msg", "登录失败"))
@@ -220,6 +256,7 @@ class IlifeApi(
                 val response =
                     client.apiGet("acc/score/mission-lst") {
                         apiHeaders(token, APP_TYPE_POINTS)
+                        headers["VersionCode"] = ApiConfig.MINI_VERSION
                     }
                 val body = bodyJson(response, notifyExpiry = false, reportError = false)
                 val ok = body.intOrNull("code") == 0
@@ -578,29 +615,55 @@ class IlifeApi(
     }
 
     // 积分与任务
-    suspend fun getMissionList(token: String): MissionListResult {
+    suspend fun getPointsSummary(
+        token: String,
+        isApp: Boolean,
+    ): PointsInfo {
+        val response = client.apiGet("acc/score/acc-score") { scoreHeaders(token, isApp) }
+        val body = bodyJson(response, reportError = false)
+        check(body.intOrNull("code") == 0) { "积分查询失败" }
+        val data = checkNotNull(body.obj("data")) { "积分查询响应不完整" }
+        return PointsInfo(data.intOrNull("validScore"), data.intOrNull("totalScore"))
+    }
+
+    suspend fun getMissionList(
+        token: String,
+        isApp: Boolean = true,
+    ): MissionListResult {
         val response =
             client.apiGet("acc/score/mission-lst") {
-                apiHeaders(token, APP_TYPE_DEVICE)
+                scoreHeaders(token, isApp)
             }
         val body = bodyJson(response)
-        val data = body.obj("data") ?: return MissionListResult(emptyList())
-        val accScore = data.obj("accScoreRsp")
-        val validScore = accScore?.intOrNull("validScore")
-        val totalScore = accScore?.intOrNull("totalScore")
-        val weekMask = accScore?.obj("daily")?.intOrNull("week") ?: 0
+        check(body.intOrNull("code") == 0) { "任务列表查询失败" }
+        val data = checkNotNull(body.obj("data")) { "任务列表响应不完整" }
+        val summaryResponse = client.apiGet("acc/score/acc-score") { scoreHeaders(token, isApp) }
+        val summaryBody = bodyJson(summaryResponse, reportError = false)
+        check(summaryBody.intOrNull("code") == 0) { "无法核验任务进度" }
+        val accScore = checkNotNull(summaryBody.obj("data")) { "缺少账户积分进度" }
+        val validScore = accScore.intOrNull("validScore")
+        val totalScore = accScore.intOrNull("totalScore")
+        val weekMask = accScore.obj("daily")?.intOrNull("week") ?: 0
         val dailyRsp = data.obj("dailyRSP")
         val dailyAdId = dailyRsp?.str("adId") ?: ""
         val dailyScore = dailyRsp?.intOrNull("score") ?: 5
 
-        // 官方 n0.b 语义：limits 中值为 -1 表示今日已达上限，按任务上限计入；负数一律视为已完成
-        val limitsArray = accScore?.arr("limits") ?: emptyList()
+        // -1 表示今日已达上限；其余异常进度不能当成 0 次继续提交。
+        val limitsArray =
+            if (accScore["limits"] == null ||
+                accScore["limits"] == JsonNull
+            ) {
+                emptyList()
+            } else {
+                checkNotNull(accScore.arr("limits")) { "任务进度格式错误" }
+            }
         val dailyDoneMap = mutableMapOf<String, Int>()
         for (item in limitsArray) {
             val obj = item.jsonObject
             val refId = obj.str("refId")
-            val limit = obj.int("limit")
-            if (refId.isNotEmpty()) dailyDoneMap[refId] = limit
+            val limit = checkNotNull(obj.intOrNull("limit")) { "缺少任务完成次数" }
+            check(refId.isNotBlank() && limit >= -1) { "任务完成次数无效" }
+            dailyDoneMap[refId] = limit
         }
 
         val missions =
@@ -650,14 +713,50 @@ class IlifeApi(
         token: String,
         uid: String,
         adId: String,
-    ): DevResult = postScoreSend(token, uid, adId, requestJson.encodeToString(MissionExecRequest(adId)))
+        score: Int,
+        isApp: Boolean,
+    ): DevResult =
+        postScoreSend(
+            token,
+            uid,
+            adId,
+            JsonObject(
+                buildMap {
+                    put("adId", JsonPrimitive(adId))
+                    put("type", JsonPrimitive(101))
+                    if (isApp) {
+                        put("addScore", JsonPrimitive(score))
+                        put("addScoreType", JsonPrimitive(if (adId == "1705776998") 2 else 4))
+                    }
+                },
+            ).toString(),
+            isApp,
+        )
 
     suspend fun signIn(
         token: String,
         uid: String,
         weekDay: Int,
         adId: String,
-    ): DevResult = postScoreSend(token, uid, adId, requestJson.encodeToString(SignInRequest(weekDay, adId)))
+        score: Int,
+        isApp: Boolean,
+    ): DevResult =
+        postScoreSend(
+            token,
+            uid,
+            adId,
+            JsonObject(
+                buildMap {
+                    put(if (isApp) "weekday" else "weekDay", JsonPrimitive(weekDay))
+                    put("adId", JsonPrimitive(adId))
+                    if (isApp) {
+                        put("addScore", JsonPrimitive(score))
+                        put("addScoreType", JsonPrimitive(1))
+                    }
+                },
+            ).toString(),
+            isApp,
+        )
 
     // 执行任务与签到共用的 score-send 请求
     private suspend fun postScoreSend(
@@ -665,13 +764,14 @@ class IlifeApi(
         uid: String,
         adId: String,
         body: String,
+        isApp: Boolean,
     ): DevResult {
-        val sign = Signer.sign(adId, token, uid)
+        val sign = Signer.task(adId, token, uid, isApp, currentTimeMillis() + if (isApp) appTimeOffsetMillis else 0L)
         val response =
-            client.apiPost("acc/score/score-send?sign=$sign&s=1") {
+            client.apiPost("acc/score/score-send?sign=$sign${if (isApp) "&s=1" else ""}") {
                 contentType(ContentType.Application.Json)
                 setBody(body)
-                apiHeaders(token, APP_TYPE_DEVICE)
+                scoreHeaders(token, isApp)
             }
         return parseDevResult(response.bodyAsText(), reportError = false, token = token)
     }
@@ -681,6 +781,7 @@ class IlifeApi(
         page: Int = 0,
         size: Int,
         src: Int? = null,
+        isApp: Boolean = true,
     ): ScoreListResult {
         val response =
             client.apiGet("acc/score/score-lst") {
@@ -688,7 +789,7 @@ class IlifeApi(
                 parameter("size", size.toString())
                 parameter("hasCount", "1")
                 if (src != null) parameter("src", src.toString())
-                apiHeaders(token, APP_TYPE_DEVICE)
+                apiHeaders(token, if (isApp) APP_TYPE_DEVICE else APP_TYPE_POINTS)
             }
         val body = bodyJson(response)
         val data = body.arr("data") ?: return ScoreListResult(emptyList(), 0)

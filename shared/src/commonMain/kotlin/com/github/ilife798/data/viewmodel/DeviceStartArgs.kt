@@ -2,6 +2,18 @@ package com.github.ilife798.data.viewmodel
 
 import com.github.ilife798.data.model.DeviceGoods
 
+fun isDeviceChannelRequired(
+    dtype: Int,
+    subsCount: Int,
+    sensors: List<Int>,
+    fmv: String = "",
+): Boolean =
+    when (dtype) {
+        120 -> subsCount > 0
+        20 -> 12 in sensors && subsCount > 0 && (fmv.split('.').lastOrNull()?.toIntOrNull() ?: 0) > 311
+        else -> false
+    }
+
 // 通道设备固定 {pos,mode}，其余有模式走 {mode,ext}，仅通道走 {pos,mode:null}；
 // washingFallbackMode：洗衣机非海尔网关未选模式时发 {"mode":-1,"ext":[...]}
 fun buildDeviceDetailStartArgs(

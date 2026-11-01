@@ -770,12 +770,13 @@ class AppViewModel : ViewModel() {
     fun sendSmsCode(
         phone: String,
         graphCode: String,
+        isAlipay: Boolean = false,
     ) {
         viewModelScope.launch {
             isLoading = true
             errorMessage = null
             try {
-                val response = api.sendSmsCode(phone, graphCode, captchaKey)
+                val response = api.sendSmsCode(phone, graphCode, captchaKey, isAlipay)
                 val json = Json { ignoreUnknownKeys = true }
                 val obj = json.parseToJsonElement(response).jsonObject
                 val code = obj.int("code", -1)
@@ -1177,7 +1178,7 @@ class AppViewModel : ViewModel() {
         val src = filter.src
         return viewModelScope.launch {
             try {
-                val result = api.getScoreList(token, size = SCORE_PAGE_SIZE, src = src)
+                val result = api.getScoreList(token, size = SCORE_PAGE_SIZE, src = src, isApp = token == state.account.appToken)
                 if (currentToken() != token) return@launch
                 scoreLists = scoreLists + (
                     filter to
@@ -1223,7 +1224,15 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val nextPage = current.page + 1
-                val result = api.getScoreList(token, page = nextPage, size = SCORE_PAGE_SIZE, src = src)
+                val result =
+                    api.getScoreList(
+                        token,
+                        page = nextPage,
+                        size = SCORE_PAGE_SIZE,
+                        src = src,
+                        isApp =
+                            token == state.account.appToken,
+                    )
                 if (currentToken() != token) return@launch
                 val latest = scoreLists[filter] ?: return@launch
                 val seen = latest.records.map { "${it.time}|${it.score}|${it.name}" }.toMutableSet()
@@ -1256,7 +1265,7 @@ class AppViewModel : ViewModel() {
         if (token.isEmpty()) return null
         return viewModelScope.launch {
             try {
-                val result = api.getMissionList(token)
+                val result = api.getMissionList(token, token == state.account.appToken)
                 if (currentToken() != token) return@launch
                 state =
                     state.copy(

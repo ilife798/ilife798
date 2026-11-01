@@ -34,6 +34,8 @@ jobs:
     env:
       API_GATEWAY: ${{ secrets.API_GATEWAY }}
       SIGN_SALT: ${{ secrets.SIGN_SALT }}
+      APP_SIGN_SALT: ${{ secrets.APP_SIGN_SALT }}
+      MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -74,6 +76,8 @@ jobs:
     env:
       API_GATEWAY: ${{ secrets.API_GATEWAY }}
       SIGN_SALT: ${{ secrets.SIGN_SALT }}
+      APP_SIGN_SALT: ${{ secrets.APP_SIGN_SALT }}
+      MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
     steps:
@@ -93,6 +97,8 @@ jobs:
         run: |
           test -n "$API_GATEWAY" || { echo '::error::API_GATEWAY is not configured'; exit 1; }
           test -n "$SIGN_SALT" || { echo '::error::SIGN_SALT is not configured'; exit 1; }
+          test -n "$APP_SIGN_SALT" || { echo '::error::APP_SIGN_SALT is not configured'; exit 1; }
+          test -n "$MINI_SIGN_SALT" || { echo '::error::MINI_SIGN_SALT is not configured'; exit 1; }
           test -n "$API_CID" || { echo '::error::API_CID is not configured'; exit 1; }
       - name: Configure stable release signing
         env:
@@ -135,17 +141,19 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
           ## 新增与修复
-          - 修复多设备小组件右侧露出后排电源按钮、文字及重复页码的问题。
-          - 调整滑动控件的显示边界和卡片尺寸，让当前设备完整遮挡后排卡片，静止时保持单层外观。
-          - 保留横向 4 列、2 行、上下滑动切换设备及点击当前电源按钮直接启动的操作方式。
-          - 已用三台本地模拟设备验证正反向切换、空白区域不触发启动、按钮准确启动当前设备。
+          - 同步新版设备登录、小程序积分登录及双渠道积分签名协议。
+          - 积分任务按累计积分变化核验实际到账，查询失败时保留已核验结果，不按标称分数虚增。
+          - 修复桌面设备启动时误提示选择模式或通道、漏读已保存参数的问题。
+          - 唯一选项自动处理；多个模式或通道可直接在小组件内选择并记住，无需跳转 App。
+          - 修复滑动容器将多个选项误当首项处理的问题，准确传递用户选择；支持翻页、取消和防重复启动。
+          - 保留横向 4 列、2 行及上下滑动切换设备；启动中与实际运行中分开显示。
 
           ## 安装说明
           - 普通安卓手机优先下载 arm64-v8a APK；旧手机可选 armeabi-v7a，模拟器使用 x86_64。
           - 本 fork 使用独立且固定的签名，与原作者 APK 签名不同，不能直接覆盖原作者版本。首次切换前请先备份原应用本地数据；后续本 fork 版本沿用同一签名。
           - 小组件电源按钮会直接发起启动，优先钱袋支付，失败后按状态校验尝试支付宝免密；积分抵扣使用当前设备保存的选择。
-          - 多设备切换支持上下滑动，到首尾停止；需要模式或通道的设备请先在 App 中选好设置。
-          - 小组件展示最近查询或操作的状态快照，非持续后台实时轮询。需要模式或通道时请在 App 中先选好再添加。
+          - 多设备切换支持上下滑动，到首尾停止；需要模式或通道时直接在组件内选择，之后可一键复用。
+          - 小组件展示最近查询或操作的状态快照，非持续后台实时轮询。
           - SHA256SUMS.txt 可用于检查下载文件完整性。
           NOTES
           assets=("$APP_MODULE"/build/outputs/apk/release/*.apk "$APP_MODULE/build/outputs/apk/release/SHA256SUMS.txt")

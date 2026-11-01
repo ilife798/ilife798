@@ -41,6 +41,6 @@ internal fun createAndroidHttpClient(
             contentType(ContentType.Application.Json)
             header("Accept-Language", "zh-Hans-CN;q=1")
             header("User-Agent", ApiConfig.USER_AGENT)
-            header("VersionCode", ApiConfig.VERSION_CODE)
+            if (headers["VersionCode"] == null) header("VersionCode", ApiConfig.VERSION_CODE)
         }
     }

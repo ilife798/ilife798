@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
             gateway = BuildConfig.API_GATEWAY,
             salt = BuildConfig.SIGN_SALT,
             clientId = BuildConfig.API_CID,
+            appSalt = BuildConfig.APP_SIGN_SALT,
+            miniSalt = BuildConfig.MINI_SIGN_SALT,
         )
 
         handleIntent(intent)

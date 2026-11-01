@@ -18,5 +18,5 @@
     <string name="device_widget_settings">设置桌面设备</string>
     <string name="device_widget_open_app">打开 App 刷新设备</string>
     <string name="device_widget_empty">暂无设备快照。请先打开 App 登录并加载常用设备，再重新添加小组件；也可在设备详情点击「桌面」。</string>
-    <string name="device_widget_choose_hint">选择首先显示的设备，随后可上下滑动浏览已同步的设备。每张卡片使用显示的账号，点击电源直接启动；需要模式或通道时，请先在详情选好后添加。</string>
+    <string name="device_widget_choose_hint">选择首先显示的设备，随后可上下滑动切换。点击电源直接启动；需要模式或通道时可在小组件内选择，之后会记住本次选择。</string>
 </resources>
