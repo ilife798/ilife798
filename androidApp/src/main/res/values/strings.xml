@@ -5,4 +5,16 @@
     <string name="shortcut_run_tasks_short">积分任务</string>
     <string name="shortcut_run_tasks_long">运行积分任务</string>
     <string name="tile_device_label">设备快捷启动</string>
+    <string name="device_widget_label">ILife798 设备</string>
+    <string name="device_widget_description">将常用设备放到桌面，查看最近状态并打开设备详情</string>
+    <string name="device_widget_choose">选择桌面设备</string>
+    <string name="device_widget_not_configured">待选择设备</string>
+    <string name="device_widget_logged_out">账号已退出</string>
+    <string name="device_widget_configure_hint">点击选择设备或重新登录账号</string>
+    <string name="device_widget_synced">快照更新于 %1$s</string>
+    <string name="device_widget_choose_action">选择设备 ›</string>
+    <string name="device_widget_open">打开设备 ›</string>
+    <string name="device_widget_open_app">打开 App 刷新设备</string>
+    <string name="device_widget_empty">暂无设备快照。请先打开 App 登录并加载常用设备，再重新添加小组件；也可在设备详情点击「桌面」。</string>
+    <string name="device_widget_choose_hint">每个小组件独立绑定设备和账号。状态在 App 刷新设备后同步。</string>
 </resources>

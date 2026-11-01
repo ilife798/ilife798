@@ -5,20 +5,21 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-    tags:
-      - 'v*'
-    paths-ignore:
-      - 'iosApp/**'
-      - '.github/workflows/**'
-      - '**/*.md'
+    tags: ['v*']
+    paths-ignore: ['iosApp/**', '**/*.md']
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '构建并发布当前版本的签名 APK'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   APP_MODULE: androidApp
@@ -26,142 +27,133 @@ env:
 jobs:
   validate:
     name: Validate Android build
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
-
+    timeout-minutes: 40
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    env:
+      API_GATEWAY: ${{ secrets.API_GATEWAY }}
+      SIGN_SALT: ${{ secrets.SIGN_SALT }}
+      API_CID: ${{ secrets.API_CID }}
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: 'platform-tools'
-
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-37.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
+      - name: Install Android platform and build tools
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+      - run: chmod +x ./gradlew
+      - name: Read release version
+        id: version
         run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-
-      - name: Check formatting, tests and lint
-        run: ./gradlew spotlessCheck testAndroidHostTest lintDebug --no-daemon --stacktrace
-
-      - name: Build debug APKs
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Upload debug APKs
-        uses: actions/upload-artifact@v7
+          version="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' "$APP_MODULE/build.gradle.kts" | head -n 1)"
+          test -n "$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then test "$GITHUB_REF_NAME" = "v$version"; fi
+      - name: Check formatting, tests, lint and debug build
+        run: ./gradlew spotlessCheck :shared:testAndroidHostTest :androidApp:lintDebug :androidApp:assembleDebug --no-daemon
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ilife798-debug-apk
           path: ${{ env.APP_MODULE }}/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
   release:
-    name: Build and publish Android release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Build and publish signed Android release
+    needs: validate
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: write
-
+    env:
+      API_GATEWAY: ${{ secrets.API_GATEWAY }}
+      SIGN_SALT: ${{ secrets.SIGN_SALT }}
+      API_CID: ${{ secrets.API_CID }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: 'platform-tools'
-
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-37.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Verify release tag matches app version
+      - name: Install Android platform and build tools
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+      - run: chmod +x ./gradlew
+      - name: Verify upstream configuration
         run: |
-          version_name="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' "$APP_MODULE/build.gradle.kts" | head -n 1)"
-          test "$GITHUB_REF_NAME" = "v$version_name"
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-
-      - name: Configure release signing
+          test -n "$API_GATEWAY" || { echo '::error::API_GATEWAY is not configured'; exit 1; }
+          test -n "$SIGN_SALT" || { echo '::error::SIGN_SALT is not configured'; exit 1; }
+          test -n "$API_CID" || { echo '::error::API_CID is not configured'; exit 1; }
+      - name: Configure stable release signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
-          {
-            printf 'signing.storeFile=%s\n' "$RUNNER_TEMP/release.keystore"
-            printf 'signing.storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
-            printf 'signing.keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
-            printf 'signing.keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
-          } > local.properties
-
-      - name: Run tests and build signed release APKs
-        run: ./gradlew testAndroidHostTest assembleRelease --no-daemon --stacktrace
-
-      - name: Verify release APK signatures
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          names = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
+          for name in names:
+              if not os.environ.get(name):
+                  raise SystemExit(f'Missing signing secret: {name}')
+          key = Path(os.environ['RUNNER_TEMP']) / 'ilife798-release.jks'
+          key.write_bytes(base64.b64decode(os.environ['ANDROID_KEYSTORE_BASE64'], validate=True))
+          key.chmod(0o600)
+          def escape(value):
+              return value.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r')
+          values = {'signing.storeFile': str(key), 'signing.storePassword': os.environ['ANDROID_KEYSTORE_PASSWORD'],
+                    'signing.keyAlias': os.environ['ANDROID_KEY_ALIAS'], 'signing.keyPassword': os.environ['ANDROID_KEY_PASSWORD']}
+          Path('local.properties').write_text(''.join(f'{k}={escape(v)}\n' for k, v in values.items()), encoding='ascii')
+          PY
+      - name: Build signed release APKs
+        run: ./gradlew :androidApp:assembleRelease --no-daemon
+      - name: Verify signatures and generate checksums
         run: |
-          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
-          for apk in "$APP_MODULE"/build/outputs/apk/release/*.apk; do
-            "$apksigner" verify --print-certs "$apk"
-          done
-
-      - name: Preserve R8 mapping
-        uses: actions/upload-artifact@v7
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          for apk in "$APP_MODULE"/build/outputs/apk/release/*.apk; do "$apksigner" verify --verbose --print-certs "$apk"; done
+          (cd "$APP_MODULE/build/outputs/apk/release" && sha256sum *.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ilife798-${{ github.ref_name }}-r8-mapping
+          name: ilife798-${{ needs.validate.outputs.tag }}-r8-mapping
           path: ${{ env.APP_MODULE }}/build/outputs/mapping/release/mapping.txt
           if-no-files-found: error
-
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=("$APP_MODULE"/build/outputs/apk/release/*.apk)
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          ## 新增与修复
+          - 安卓桌面设备小组件：设备详情点击「桌面」添加，也支持从系统小组件列表选择设备。
+          - 多个组件可独立绑定不同设备、不同账号，点击时恢复绑定账号并刷新设备详情。
+          - 显示最近状态快照和更新时间；退出账号后清除快照，避免使用其他账号操作。
+          - 修复首页常用设备被旧分类隐藏、加载状态阻塞列表，以及跨账号详情不刷新问题。
+
+          ## 安装说明
+          - 普通安卓手机优先下载 arm64-v8a APK；旧手机可选 armeabi-v7a，模拟器使用 x86_64。
+          - 本 fork 使用独立且固定的签名，与原作者 APK 签名不同，不能直接覆盖原作者版本。首次切换前请先备份原应用本地数据；后续本 fork 版本沿用同一签名。
+          - 小组件显示 App 最近同步的快照，非持续后台实时轮询。可点击卡片进入设备详情刷新。
+          - SHA256SUMS.txt 可用于检查下载文件完整性。
+          NOTES
+          assets=("$APP_MODULE"/build/outputs/apk/release/*.apk "$APP_MODULE/build/outputs/apk/release/SHA256SUMS.txt")
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            # iOS 工作流可能已抢先创建同名 release，创建失败时改为上传
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --generate-notes \
-              || gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            gh release create "$RELEASE_TAG" "${assets[@]}" --target "$GITHUB_SHA" --draft --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+      - name: Remove signing files
+        if: always()
+        run: rm -f local.properties "$RUNNER_TEMP/ilife798-release.jks"

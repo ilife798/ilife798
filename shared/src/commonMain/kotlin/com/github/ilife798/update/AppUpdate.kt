@@ -6,11 +6,11 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import kotlinx.serialization.json.Json
 
-private const val RELEASES_API = "https://api.github.com/repos/ilife798/ilife798/releases/latest"
-
 object AppUpdate {
+    var repository: String = "ilife798/ilife798"
+
     // 更新移交回退：未找到本平台安装包时打开发布页。
-    const val RELEASES_PAGE_URL = "https://github.com/ilife798/ilife798/releases"
+    val RELEASES_PAGE_URL: String get() = "https://github.com/$repository/releases"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -19,7 +19,7 @@ object AppUpdate {
     suspend fun fetchLatestRelease(): GithubRelease {
         val body =
             client
-                .get(RELEASES_API) {
+                .get("https://api.github.com/repos/$repository/releases/latest") {
                     header(HttpHeaders.Accept, "application/vnd.github+json")
                     header(HttpHeaders.UserAgent, "ilife798-update")
                 }.bodyAsText()

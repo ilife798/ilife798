@@ -365,12 +365,18 @@ class IlifeApi(
     }
 
     // 设备
-    suspend fun getMasterDevices(token: String): MasterResult {
+    suspend fun getMasterDevices(
+        token: String,
+        appType: String = APP_TYPE_DEVICE,
+    ): MasterResult {
         val response =
             client.apiGet("ui/app/master") {
-                apiHeaders(token, APP_TYPE_DEVICE)
+                apiHeaders(token, appType)
             }
         val body = bodyJson(response, reportError = false)
+        if (body.int("code", -1) != 0) {
+            throw IllegalStateException(body.str("msg", "常用设备加载失败"))
+        }
         val data = body.obj("data") ?: return MasterResult()
         val accountId = data.obj("account")?.str("id") ?: ""
         val favos = data.arr("favos") ?: return MasterResult(accountId)
@@ -385,6 +391,7 @@ class IlifeApi(
                     name = obj.str("name"),
                     geneStatus = geneStatus,
                     dtype = dtype,
+                    deviceStatus = obj.int("status", 1),
                 )
             }
         return MasterResult(accountId, devices)

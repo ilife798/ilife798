@@ -62,9 +62,8 @@ class DeviceController(
 ) {
     private val api: IlifeApi get() = apiProvider()
 
-    // 选择的设备类型，默认取已收藏设备的类型（按 洗烘/吹风/饮水/淋浴 顺序取最上），
-    // 用户手动选择后持久化，下次进入或重启沿用
-    var homeDeviceType by mutableStateOf(HomeDeviceType.Shower)
+    // 默认显示全部收藏；保留仍能匹配设备的手选分类，避免旧分类把列表隐藏。
+    var homeDeviceType by mutableStateOf(HomeDeviceType.All)
         private set
     private var homeDeviceTypeExplicit = false
 
@@ -82,6 +81,8 @@ class DeviceController(
 
     // 仅供控制器内部记录详情归属，无 UI 观察者，普通字段即可
     private var detailDeviceId: String? = null
+    private var detailLoadJob: Job? = null
+    private var detailLoadAuth: DeviceAuth? = null
 
     var pollingDeviceId by mutableStateOf<String?>(null)
         private set
@@ -93,6 +94,7 @@ class DeviceController(
     private val runningDevices = mutableMapOf<String, String>()
     private var deviceMonitorJob: Job? = null
     private var lastDeviceLoadTime = 0L
+    private var deviceLoadGeneration = 0L
 
     // 设备详情页的临时账号选择：设备 ID -> 账号列表下标。
     // 只影响本机的设备操作，不改动全局登录态（account/currentAccountIndex），仅存内存不落盘。
@@ -434,18 +436,17 @@ class DeviceController(
         }
     }
 
-    private fun inferHomeDeviceType(devices: List<Device>) {
-        if (homeDeviceTypeExplicit) return
-        val dtypes = devices.map { it.dtype }.filter { it != 0 }.toSet()
-        if (dtypes.isEmpty()) return
-        // 优先精确匹配四类场景，全都不是时归入“其它”
-        homeDeviceType =
-            HomeDeviceType.entries
-                .firstOrNull { it != HomeDeviceType.Other && it.deviceType in dtypes }
-                ?: HomeDeviceType.Other
+    private fun ensureVisibleHomeDeviceType(devices: List<Device>) {
+        if (devices.isNotEmpty() && devices.none { homeDeviceType.matches(it.dtype) }) {
+            selectHomeDeviceType(HomeDeviceType.All)
+        }
     }
 
     fun reset() {
+        deviceLoadGeneration++
+        detailLoadJob?.cancel()
+        detailLoadJob = null
+        detailLoadAuth = null
         deviceMonitorJob?.cancel()
         deviceMonitorJob = null
         runningDevices.clear()
@@ -463,47 +464,77 @@ class DeviceController(
         val now = currentTimeMillis()
         if (!force && now - lastDeviceLoadTime < LOAD_COOLDOWN_MS) return null
         lastDeviceLoadTime = now
+        val generation = ++deviceLoadGeneration
+
+        fun isCurrentLoad(): Boolean {
+            val current = deviceAuth()
+            return generation == deviceLoadGeneration && current.token == auth.token &&
+                current.appType == auth.appType && current.accountIndex == auth.accountIndex
+        }
         return scope.launch {
             try {
-                val master = api.getMasterDevices(auth.token)
+                val master = api.getMasterDevices(auth.token, auth.appType)
                 // 账号已切换/退出登录，丢弃过期结果
-                if (!isCurrentToken(auth.token)) return@launch
+                if (!isCurrentLoad()) return@launch
                 // 登录态失效：主接口不再返回账户数据
                 if (master.accountId.isEmpty() && master.devices.isEmpty()) {
                     onSessionExpired()
                     return@launch
                 }
                 val devices = master.devices
-                val updatedDevices =
+                // 收藏到达后立即显示；逐台状态探测超时不应阻塞整个首页列表。
+                val favorites =
                     devices.map { dto ->
-                        val realStatus =
-                            try {
-                                api.getDevStatus(auth.token, dto.id, auth.appType)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                // 逐台设备的状态探测失败属预期（离线/超时），仅记消息避免刷屏
-                                logDebug("ILife798", "loadDeviceInfo.getDevStatus: ${e.message}")
-                                null
-                            }
                         Device(
                             id = dto.id,
                             name = dto.name,
-                            geneStatus = realStatus?.geneStatus ?: dto.geneStatus,
-                            deviceStatus = realStatus?.deviceStatus ?: 1,
+                            geneStatus = dto.geneStatus,
+                            deviceStatus = dto.deviceStatus,
                             dtype = dto.dtype,
                         )
                     }
-                val account = getState().account
-                setState {
-                    it.copy(
-                        devices = updatedDevices,
-                        account = account.copy(uid = master.accountId.ifEmpty { account.uid }),
+                ensureVisibleHomeDeviceType(favorites)
+                setState { state ->
+                    state.copy(
+                        devices = favorites,
+                        account = state.account.copy(uid = master.accountId.ifEmpty { state.account.uid }),
                     )
                 }
-                inferHomeDeviceType(updatedDevices)
+                devices.forEach { dto ->
+                    if (!isCurrentLoad()) return@launch
+                    val realStatus =
+                        try {
+                            api.getDevStatus(auth.token, dto.id, auth.appType)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // 单台设备超时不清空收藏列表。
+                            logDebug("ILife798", "loadDeviceInfo.getDevStatus: ${e.message}")
+                            null
+                        }
+                    if (!isCurrentLoad()) return@launch
+                    if (realStatus != null) {
+                        setState { state ->
+                            state.copy(
+                                devices =
+                                    state.devices.map { device ->
+                                        if (device.id == dto.id) {
+                                            device.copy(geneStatus = realStatus.geneStatus, deviceStatus = realStatus.deviceStatus)
+                                        } else {
+                                            device
+                                        }
+                                    },
+                            )
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (!isCurrentLoad()) return@launch
+                lastDeviceLoadTime = 0L
                 onLogError("loadDeviceInfo", e)
+                onToast("常用设备加载失败，请下拉刷新重试")
             }
         }
     }
@@ -544,21 +575,15 @@ class DeviceController(
         }
     }
 
-    // 离开设备详情页：刷新首页设备列表；仅在类型为自动推断时跟随该设备切换，不覆盖用户手选
+    // 离开详情页刷新收藏，保持首页当前的有效分类。
     fun onDeviceDetailClosed(deviceId: String) {
         scope.launch {
             try {
                 loadDeviceInfo(force = true)?.join()
-                if (homeDeviceTypeExplicit) return@launch
-                getState()
-                    .devices
-                    .firstOrNull { it.id == deviceId }
-                    ?.let { HomeDeviceType.fromDeviceType(it.dtype) }
-                    ?.let { homeDeviceType = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onLogError("onDeviceDetailClosed", e)
+                onLogError("onDeviceDetailClosed($deviceId)", e)
             }
         }
     }
@@ -643,40 +668,46 @@ class DeviceController(
     fun loadDeviceDetail(deviceId: String): Job? {
         val auth = deviceAuth()
         if (auth.token.isEmpty()) return null
-        if (detailDeviceId != deviceId) {
+        if (detailDeviceId == deviceId && detailLoadAuth == auth && detailLoadJob?.isActive == true) return detailLoadJob
+        detailLoadJob?.cancel()
+        if (detailDeviceId != deviceId || detailLoadAuth != auth) {
             detailDeviceId = deviceId
             deviceDetail = null
         }
-        return scope.launch {
-            try {
-                val detail = api.getDeviceDetail(auth.token, deviceId, auth.appType) ?: return@launch
-                if (!isCurrentToken(auth.token)) return@launch
-                // 已切换到其它设备详情，丢弃过期响应
-                if (detailDeviceId != deviceId) return@launch
-                deviceDetail = detail
-                setState { state ->
-                    state.copy(
-                        devices =
-                            state.devices.map {
-                                if (it.id == deviceId) {
-                                    it.copy(
-                                        name = it.name.ifEmpty { detail.name },
-                                        geneStatus = detail.geneStatus,
-                                        deviceStatus = detail.deviceStatus,
-                                        dtype = if (it.dtype == 0) detail.dtype else it.dtype,
-                                    )
-                                } else {
-                                    it
-                                }
-                            },
-                    )
+        detailLoadAuth = auth
+        val job =
+            scope.launch {
+                try {
+                    val detail = api.getDeviceDetail(auth.token, deviceId, auth.appType) ?: return@launch
+                    if (deviceAuth() != auth || detailLoadAuth != auth) return@launch
+                    // 已切换到其它设备详情，丢弃过期响应
+                    if (detailDeviceId != deviceId) return@launch
+                    deviceDetail = detail
+                    setState { state ->
+                        state.copy(
+                            devices =
+                                state.devices.map {
+                                    if (it.id == deviceId) {
+                                        it.copy(
+                                            name = it.name.ifEmpty { detail.name },
+                                            geneStatus = detail.geneStatus,
+                                            deviceStatus = detail.deviceStatus,
+                                            dtype = if (it.dtype == 0) detail.dtype else it.dtype,
+                                        )
+                                    } else {
+                                        it
+                                    }
+                                },
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    onLogError("loadDeviceDetail", e)
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                onLogError("loadDeviceDetail", e)
             }
-        }
+        detailLoadJob = job
+        return job
     }
 
     fun toggleDeviceRunning(

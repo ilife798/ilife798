@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.DeviceTile
 import com.github.ilife798.DeviceTileResult
+import com.github.ilife798.DeviceWidgets
 import com.github.ilife798.copyToClipboard
 import com.github.ilife798.data.model.DeviceOption
 import com.github.ilife798.data.model.DeviceSubState
@@ -191,7 +192,7 @@ fun DeviceDetailPage(
     val liveDevice = state.devices.firstOrNull { it.id == deviceId }
     val detail = viewModel.deviceDetail?.takeIf { it.id == deviceId }
 
-    LaunchedEffect(deviceId) {
+    LaunchedEffect(deviceId, state.account.preferredToken, viewModel.widgetDeviceOpenId) {
         if (state.account.hasAnyToken) viewModel.loadDeviceDetail(deviceId)
     }
 
@@ -362,6 +363,24 @@ fun DeviceDetailPage(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (DeviceWidgets.available) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier =
+                                Modifier
+                                    .width(48.dp)
+                                    .clickable { viewModel.pinDeviceWidget(deviceId) },
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.GridView,
+                                contentDescription = "添加桌面小组件",
+                                modifier = Modifier.size(22.dp),
+                                tint = MiuixTheme.colorScheme.onSurface,
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(text = "桌面", style = MiuixTheme.textStyles.body2)
+                        }
+                    }
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier =

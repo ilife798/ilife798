@@ -9,6 +9,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.ilife798.AppLifecycle
 import com.github.ilife798.AppStorage
+import com.github.ilife798.DeviceWidgetEntry
+import com.github.ilife798.DeviceWidgetResult
+import com.github.ilife798.DeviceWidgetTarget
+import com.github.ilife798.DeviceWidgets
 import com.github.ilife798.StorageKeys
 import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.IlifeApi
@@ -27,6 +31,7 @@ import com.github.ilife798.data.model.BackupOption
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.CloudCard
 import com.github.ilife798.data.model.DEFAULT_SEED_COLOR
+import com.github.ilife798.data.model.Device
 import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
 import com.github.ilife798.data.model.DeviceNotes
@@ -111,6 +116,9 @@ class AppViewModel : ViewModel() {
     private var lastAccountLoadTime = 0L
 
     var state by mutableStateOf(AppState())
+        private set
+
+    var widgetDeviceOpenId by mutableIntStateOf(0)
         private set
 
     var isLoading by mutableStateOf(false)
@@ -394,6 +402,80 @@ class AppViewModel : ViewModel() {
         wallet.loadSpendingStats()
         task.loadMissions()
     }
+
+    // 从小组件进入时先恢复绑定账号，避免将另一账号误用于设备操作。
+    fun selectWidgetAccount(target: DeviceWidgetTarget): Boolean {
+        if (state.account.hasAnyToken && DeviceWidgets.accountKey(state.account) == target.accountKey) {
+            device.setDeviceAccountPick(target.deviceId, -1)
+            return true
+        }
+        val index =
+            state.accountList.indexOfFirst {
+                it.account.hasAnyToken && DeviceWidgets.accountKey(it.account) == target.accountKey
+            }
+        if (index < 0) {
+            showToast("小组件对应账号已退出，请先重新登录该账号")
+            return false
+        }
+        switchAccount(index)
+        return true
+    }
+
+    fun requestWidgetDeviceDetailRefresh() {
+        widgetDeviceOpenId++
+    }
+
+    fun pinDeviceWidget(deviceId: String) {
+        val picked = device.deviceAccountPick(deviceId)
+        val account = state.accountList.getOrNull(picked)?.account ?: state.account
+        if (!account.hasAnyToken || DeviceWidgets.accountKey(account).isEmpty()) {
+            showToast("请先登录设备账号")
+            return
+        }
+        val entry =
+            deviceWidgetEntries().lastOrNull {
+                it.target.deviceId == deviceId && it.target.accountKey == DeviceWidgets.accountKey(account)
+            }
+        if (entry == null) {
+            showToast("请等待设备信息加载后再添加")
+            return
+        }
+        val result = DeviceWidgets.controller?.pin(entry) ?: DeviceWidgetResult.UNSUPPORTED
+        showToast(
+            when (result) {
+                DeviceWidgetResult.REQUESTED -> "请在系统弹窗中确认添加桌面小组件"
+                DeviceWidgetResult.UNSUPPORTED -> "请长按桌面，在小组件中选择 ILife798 设备"
+                DeviceWidgetResult.FAILED -> "添加失败，请重试或从桌面小组件列表添加"
+            },
+        )
+    }
+
+    fun deviceWidgetEntries(): List<DeviceWidgetEntry> =
+        buildList {
+            if (state.account.hasAnyToken && DeviceWidgets.accountKey(state.account).isNotEmpty()) {
+                state.devices.forEach { favorite ->
+                    add(DeviceWidgets.entry(state.account, state.accountInfo, favorite, device.deviceAlias(favorite.id)))
+                }
+            }
+            // 未收藏的设备也能从详情页添加，后续打开详情时继续同步其状态。
+            val detail = device.deviceDetail
+            if (detail != null) {
+                val picked = state.accountList.getOrNull(device.deviceAccountPick(detail.id))
+                val account = picked?.account ?: state.account
+                if (account.hasAnyToken && DeviceWidgets.accountKey(account).isNotEmpty()) {
+                    add(
+                        DeviceWidgets.entry(
+                            account,
+                            picked?.info ?: state.accountInfo,
+                            Device(detail.id, detail.name, detail.geneStatus, detail.deviceStatus, detail.dtype),
+                            device.deviceAlias(detail.id),
+                        ),
+                    )
+                }
+            }
+        }.associateBy { it.target }
+            .values
+            .toList()
 
     // 账号管理页切换账号：立即生效并重载数据
     fun switchAccount(index: Int) {

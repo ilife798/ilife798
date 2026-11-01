@@ -40,6 +40,7 @@ object AppRequests {
     // 桌面快捷方式
     val scan = UiCommand()
     val startDevice = UiRequest<String?>(null)
+    val openWidgetDevice = UiRequest<DeviceWidgetTarget?>(null)
     val runTasks = UiCommand()
 
     // NFC 标签携带的设备链接（与二维码同源，复用扫码添加流程）

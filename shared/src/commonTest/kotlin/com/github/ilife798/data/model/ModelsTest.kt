@@ -3,7 +3,6 @@ package com.github.ilife798.data.model
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ModelsTest {
@@ -13,7 +12,11 @@ class ModelsTest {
         assertEquals(HomeDeviceType.HairDrying, HomeDeviceType.fromDeviceType(20))
         assertEquals(HomeDeviceType.Drinking, HomeDeviceType.fromDeviceType(8))
         assertEquals(HomeDeviceType.Shower, HomeDeviceType.fromDeviceType(6))
-        assertNull(HomeDeviceType.fromDeviceType(0))
+        assertEquals(HomeDeviceType.Other, HomeDeviceType.fromDeviceType(0))
+        assertEquals(HomeDeviceType.Other, HomeDeviceType.fromDeviceType(5))
+        assertTrue(HomeDeviceType.All.matches(5))
+        assertTrue(HomeDeviceType.All.matches(0))
+        assertFalse(HomeDeviceType.Shower.matches(5))
         assertEquals(HomeDeviceType.Other, HomeDeviceType.fromDeviceType(999))
     }
 
