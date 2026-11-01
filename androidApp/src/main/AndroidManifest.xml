@@ -89,6 +89,11 @@
                 android:resource="@xml/device_widget_info" />
         </receiver>
 
+        <service
+            android:name=".DeviceWidgetStartService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <activity
             android:name=".DeviceWidgetConfigureActivity"
             android:exported="true"

@@ -369,7 +369,34 @@ fun DeviceDetailPage(
                             modifier =
                                 Modifier
                                     .width(48.dp)
-                                    .clickable { viewModel.pinDeviceWidget(deviceId) },
+                                    .clickable {
+                                        when {
+                                            detail == null -> {
+                                                showToast("请等待设备信息加载")
+                                            }
+
+                                            channelRequired && selectedChannel < 0 -> {
+                                                showToast("请先选择小组件使用的通道")
+                                            }
+
+                                            modeRequired && selectedMode == null -> {
+                                                showToast("请先选择小组件使用的模式")
+                                            }
+
+                                            else -> {
+                                                viewModel.pinDeviceWidget(
+                                                    deviceId,
+                                                    buildDeviceDetailStartArgs(
+                                                        goods,
+                                                        selectedMode,
+                                                        selectedChannel,
+                                                        passageDevice,
+                                                        dtype == 10 && gtype != GATEWAY_HAIER,
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    },
                         ) {
                             Icon(
                                 imageVector = MiuixIcons.GridView,

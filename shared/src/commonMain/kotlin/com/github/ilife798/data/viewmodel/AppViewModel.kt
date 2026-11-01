@@ -425,7 +425,10 @@ class AppViewModel : ViewModel() {
         widgetDeviceOpenId++
     }
 
-    fun pinDeviceWidget(deviceId: String) {
+    fun pinDeviceWidget(
+        deviceId: String,
+        startArgs: String,
+    ) {
         val picked = device.deviceAccountPick(deviceId)
         val account = state.accountList.getOrNull(picked)?.account ?: state.account
         if (!account.hasAnyToken || DeviceWidgets.accountKey(account).isEmpty()) {
@@ -440,7 +443,9 @@ class AppViewModel : ViewModel() {
             showToast("请等待设备信息加载后再添加")
             return
         }
-        val result = DeviceWidgets.controller?.pin(entry) ?: DeviceWidgetResult.UNSUPPORTED
+        val result =
+            DeviceWidgets.controller?.pin(entry.copy(startArgs = startArgs, autoDeduct = device.autoDeduct))
+                ?: DeviceWidgetResult.UNSUPPORTED
         showToast(
             when (result) {
                 DeviceWidgetResult.REQUESTED -> "请在系统弹窗中确认添加桌面小组件"

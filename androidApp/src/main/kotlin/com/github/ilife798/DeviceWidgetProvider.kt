@@ -10,11 +10,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.view.View
 import android.widget.RemoteViews
 import java.util.UUID
 
 private const val ACTION_WIDGET_PINNED = "com.github.ilife798.action.WIDGET_PINNED"
 private const val EXTRA_WIDGET_KEY = "com.github.ilife798.extra.WIDGET_KEY"
+private const val EXTRA_START_ARGS = "com.github.ilife798.extra.WIDGET_START_ARGS"
+private const val EXTRA_AUTO_DEDUCT = "com.github.ilife798.extra.WIDGET_AUTO_DEDUCT"
 
 class AndroidDeviceWidgetController(
     private val context: Context,
@@ -40,6 +43,8 @@ class AndroidDeviceWidgetController(
                         .setAction(ACTION_WIDGET_PINNED)
                         .setData(Uri.parse("ilife798-widget://pin/${UUID.randomUUID()}"))
                         .putExtra(EXTRA_WIDGET_KEY, store.key(entry.target))
+                        .putExtra(EXTRA_START_ARGS, entry.startArgs)
+                        .putExtra(EXTRA_AUTO_DEDUCT, entry.autoDeduct)
                 // 系统需要写入成功添加后的 appWidgetId；必须使用显式、一次性的可变回调。
                 val mutableFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
                 val success = PendingIntent.getBroadcast(context, 0, callback, PendingIntent.FLAG_ONE_SHOT or mutableFlag)
@@ -84,7 +89,7 @@ class DeviceWidgetProvider : AppWidgetProvider() {
         val store = DeviceWidgetStore(context)
         // 用户确认系统弹窗之前可能已经退出对应账号。
         if (store.get(key) == null) return
-        store.bind(id, key)
+        store.bind(id, key, intent.getStringExtra(EXTRA_START_ARGS), intent.getBooleanExtra(EXTRA_AUTO_DEDUCT, true))
         update(context, id)
     }
 
@@ -117,39 +122,81 @@ class DeviceWidgetProvider : AppWidgetProvider() {
             val key = previewKey ?: store.binding(widgetId)
             val snapshot = key?.let { store.get(it) }
             val entry = snapshot?.entry
+            val action = if (entry != null) store.action(widgetId) else null
+            val busy = action?.optBoolean("busy") == true
             return RemoteViews(context.packageName, R.layout.widget_device).apply {
                 setTextViewText(R.id.widget_account, entry?.accountLabel ?: context.getString(R.string.device_widget_label))
                 setTextViewText(R.id.widget_name, entry?.name ?: context.getString(R.string.device_widget_choose))
                 setTextViewText(
                     R.id.widget_status,
-                    entry?.status ?: context.getString(
+                    action?.optString("message") ?: entry?.status ?: context.getString(
                         if (key == null) R.string.device_widget_not_configured else R.string.device_widget_logged_out,
                     ),
                 )
                 setTextViewText(
                     R.id.widget_updated,
-                    snapshot?.let { context.getString(R.string.device_widget_synced, DateFormat.format("MM-dd HH:mm", it.syncedAt)) }
+                    action?.let { context.getString(R.string.device_widget_operated, DateFormat.format("MM-dd HH:mm", it.optLong("at"))) }
+                        ?: snapshot?.let { context.getString(R.string.device_widget_synced, DateFormat.format("MM-dd HH:mm", it.syncedAt)) }
                         ?: context.getString(R.string.device_widget_configure_hint),
                 )
                 setTextViewText(
                     R.id.widget_open,
-                    context.getString(if (entry == null) R.string.device_widget_choose_action else R.string.device_widget_open),
+                    if (busy) {
+                        "启动中…"
+                    } else {
+                        context.getString(
+                            if (entry ==
+                                null
+                            ) {
+                                R.string.device_widget_choose_action
+                            } else {
+                                R.string.device_widget_open
+                            },
+                        )
+                    },
                 )
+                setViewVisibility(R.id.widget_progress, if (busy) View.VISIBLE else View.GONE)
                 val click =
                     if (entry != null) {
-                        Intent(context, MainActivity::class.java)
-                            .setAction(IntentActions.ACTION_OPEN_WIDGET_DEVICE)
-                            .putExtra(IntentActions.EXTRA_DEVICE_ID, entry.target.deviceId)
-                            .putExtra(IntentActions.EXTRA_WIDGET_ACCOUNT, entry.target.accountKey)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        Intent(context, DeviceWidgetStartService::class.java)
+                            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
                     } else {
                         Intent(context, DeviceWidgetConfigureActivity::class.java)
                             .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
                     }
-                click.data = Uri.parse("ilife798-widget://open/$widgetId")
+                click.data = Uri.parse("ilife798-widget://start/$widgetId")
                 setOnClickPendingIntent(
                     R.id.widget_root,
-                    PendingIntent.getActivity(context, widgetId, click, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE),
+                    if (entry !=
+                        null
+                    ) {
+                        PendingIntent.getForegroundService(
+                            context,
+                            widgetId,
+                            click,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        )
+                    } else {
+                        PendingIntent.getActivity(
+                            context,
+                            widgetId,
+                            click,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        )
+                    },
+                )
+                val configure =
+                    Intent(context, DeviceWidgetConfigureActivity::class.java)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                        .setData(Uri.parse("ilife798-widget://configure/$widgetId"))
+                setOnClickPendingIntent(
+                    R.id.widget_settings,
+                    PendingIntent.getActivity(
+                        context,
+                        widgetId,
+                        configure,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
                 )
             }
         }

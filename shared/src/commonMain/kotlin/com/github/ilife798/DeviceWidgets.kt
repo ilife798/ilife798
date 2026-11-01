@@ -16,6 +16,8 @@ data class DeviceWidgetEntry(
     val accountLabel: String,
     val name: String,
     val status: String,
+    val startArgs: String? = null,
+    val autoDeduct: Boolean = true,
 )
 
 enum class DeviceWidgetResult {

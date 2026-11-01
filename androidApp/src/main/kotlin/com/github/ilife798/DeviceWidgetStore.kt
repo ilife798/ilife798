@@ -61,6 +61,21 @@ internal class DeviceWidgetStore(
                 .put("accountLabel", entry.accountLabel)
                 .put("name", entry.name)
                 .put("status", entry.status)
+        val args = entry.startArgs ?: old?.takeIf { it.has("startArgs") }?.optString("startArgs")
+        if (args !=
+            null
+        ) {
+            data.put("startArgs", args).put(
+                "autoDeduct",
+                if (entry.startArgs !=
+                    null
+                ) {
+                    entry.autoDeduct
+                } else {
+                    old?.optBoolean("autoDeduct", true) ?: true
+                },
+            )
+        }
         val unchanged = data.keys().asSequence().all { field -> old?.optString(field) == data.optString(field) }
         data.put("syncedAt", if (unchanged) old?.optLong("syncedAt", 0L) ?: 0L else System.currentTimeMillis())
         snapshots.put(key, data)
@@ -82,7 +97,17 @@ internal class DeviceWidgetStore(
         val target = DeviceWidgetTarget(data.optString("accountKey"), data.optString("deviceId"))
         if (target.accountKey.isBlank() || target.deviceId.isBlank()) return null
         return StoredDeviceWidget(
-            DeviceWidgetEntry(target, data.optString("accountLabel"), data.optString("name"), data.optString("status")),
+            DeviceWidgetEntry(
+                target,
+                data.optString("accountLabel"),
+                data.optString("name"),
+                data.optString("status"),
+                data
+                    .takeIf {
+                        it.has("startArgs")
+                    }?.optString("startArgs"),
+                data.optBoolean("autoDeduct", true),
+            ),
             data.optLong("syncedAt", 0L),
         )
     }
@@ -92,13 +117,60 @@ internal class DeviceWidgetStore(
     fun bind(
         widgetId: Int,
         key: String,
+        args: String? = get(key)?.entry?.startArgs,
+        autoDeduct: Boolean = get(key)?.entry?.autoDeduct ?: true,
     ) {
-        prefs.edit().putString("binding_$widgetId", key).apply()
+        prefs
+            .edit()
+            .putString(
+                "binding_$widgetId",
+                key,
+            ).putString("args_$widgetId", args)
+            .putBoolean("deduct_$widgetId", autoDeduct)
+            .remove("action_$widgetId")
+            .apply()
+    }
+
+    fun startArgs(widgetId: Int): String? = prefs.getString("args_$widgetId", null)
+
+    fun autoDeduct(widgetId: Int): Boolean = prefs.getBoolean("deduct_$widgetId", true)
+
+    fun recentlyStarted(deviceId: String): Boolean = System.currentTimeMillis() - prefs.getLong("attempt_$deviceId", 0L) < 60_000
+
+    fun recordStart(deviceId: String) {
+        prefs.edit().putLong("attempt_$deviceId", System.currentTimeMillis()).commit()
+    }
+
+    fun action(widgetId: Int): JSONObject? =
+        runCatching {
+            JSONObject(prefs.getString("action_$widgetId", "") ?: "").takeIf { System.currentTimeMillis() - it.optLong("at") < 120_000 }
+        }.getOrNull()
+
+    fun setAction(
+        widgetId: Int,
+        message: String,
+        busy: Boolean,
+    ) {
+        prefs
+            .edit()
+            .putString(
+                "action_$widgetId",
+                JSONObject()
+                    .put("message", message)
+                    .put("busy", busy)
+                    .put("at", System.currentTimeMillis())
+                    .toString(),
+            ).apply()
     }
 
     fun remove(widgetIds: IntArray) {
         prefs.edit().apply {
-            widgetIds.forEach { remove("binding_$it") }
+            widgetIds.forEach {
+                remove("binding_$it")
+                remove("args_$it")
+                remove("deduct_$it")
+                remove("action_$it")
+            }
             apply()
         }
     }
