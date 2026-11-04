@@ -41,6 +41,8 @@ fun resolveIosBuildConfig(
 
 val iosApiGateway = resolveIosBuildConfig("ILIFE798_API_GATEWAY", "API_GATEWAY")
 val iosSignSalt = resolveIosBuildConfig("ILIFE798_SIGN_SALT", "SIGN_SALT")
+// 小程序通道（ApplicationType 1,5）的独立盐，缺省空串
+val iosMiniSignSalt = resolveIosBuildConfig("ILIFE798_MINI_SIGN_SALT", "MINI_SIGN_SALT")
 val iosApiCid = resolveIosBuildConfig("ILIFE798_API_CID", "API_CID")
 
 val generateIosBuildConfig =
@@ -49,9 +51,11 @@ val generateIosBuildConfig =
         val generatedDir = layout.buildDirectory.dir("generated/iosBuildConfig/kotlin")
         val apiGateway = iosApiGateway
         val signSalt = iosSignSalt
+        val miniSignSalt = iosMiniSignSalt
         val apiCid = iosApiCid
         inputs.property("apiGateway", apiGateway)
         inputs.property("signSalt", signSalt)
+        inputs.property("miniSignSalt", miniSignSalt)
         inputs.property("apiCid", apiCid)
         outputs.dir(generatedDir)
         doLast {
@@ -73,6 +77,7 @@ val generateIosBuildConfig =
                 |object IosBuildConfig {
                 |    const val API_GATEWAY: String = "${escapeKotlinStringLiteral(apiGateway)}"
                 |    const val SIGN_SALT: String = "${escapeKotlinStringLiteral(signSalt)}"
+                |    const val MINI_SIGN_SALT: String = "${escapeKotlinStringLiteral(miniSignSalt)}"
                 |    const val API_CID: String = "${escapeKotlinStringLiteral(apiCid)}"
                 |}
                 """.trimMargin(),

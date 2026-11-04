@@ -5,8 +5,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.RunNotifications
 import com.github.ilife798.data.api.IlifeApi
+import com.github.ilife798.data.model.Account
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.MissionInfo
+import com.github.ilife798.data.model.PointsInfo
 import com.github.ilife798.update.requestNotificationPermission
 import com.github.ilife798.util.currentTimeFormatted
 import com.github.ilife798.util.currentTimeMillis
@@ -61,12 +63,76 @@ class TaskController(
         val gained: Int,
     )
 
+    /*
+     * 到账核验状态（借鉴下游 dong-dong6/ilife798 v1.3.15）。
+     *
+     * 不用客户端自己累加 `gained += score`——那样算的只是「请求成功的标称分」，
+     * 请求成功但服务端没入账时会虚高。改为回查 acc/score/acc-score 的 totalScore
+     * 真实增量，能区分「请求成功但没到账」与「真的到账了」。
+     */
+    private class Earnings(
+        val account: Account,
+        val before: Int?,
+    ) {
+        var verified = 0
+        var queryFailed = false
+    }
+
+    // 按通道优先级查积分汇总：积分 token 优先，缺失时回退 appToken
+    private suspend fun pointsFor(account: Account): PointsInfo {
+        val tokens = listOf(account.token to false, account.appToken to true).filter { it.first.isNotEmpty() }
+        var failure: Exception? = null
+        for ((token, app) in tokens) {
+            try {
+                val result = api.getPointsSummary(token, app)
+                check(result.total != null) { "缺少累计积分，无法核验到账" }
+                return result
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failure = e
+            }
+        }
+        throw failure ?: IllegalStateException("没有可用的积分查询登录")
+    }
+
+    // 回查累计积分增量，作为本轮实际到账数。核验失败时保留此前已核验值，不吞掉进度。
+    private suspend fun verifyPoints(earnings: Earnings): Int {
+        val account = getState().account
+        if (account.appToken != earnings.account.appToken || account.token != earnings.account.token) {
+            throw CancellationException("账号已切换")
+        }
+        try {
+            val points = pointsFor(earnings.account)
+            if (getState().account.appToken != earnings.account.appToken ||
+                getState().account.token != earnings.account.token
+            ) {
+                throw CancellationException("账号已切换")
+            }
+            val before = checkNotNull(earnings.before) { "缺少本轮初始积分" }
+            val delta = checkNotNull(points.total) - before
+            check(delta >= earnings.verified) { "累计积分减少，无法确认本轮到账" }
+            earnings.verified = delta
+            earnings.queryFailed = false
+            setState { it.copy(points = points) }
+            RunNotifications.updateTask(delta)
+            addTaskLog("到账核验：本轮期间累计积分增加 $delta 分（包含其他渠道入账）")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            earnings.queryFailed = true
+            addTaskLog("到账核验失败，保留此前已核验 ${earnings.verified} 分，请稍后刷新")
+        }
+        return earnings.verified
+    }
+
     private data class MergedMissions(
         val missions: List<MissionInfo>,
         val weekMask: Int,
         val dailyAdId: String,
         val dailyScore: Int,
         val dailyToken: String,
+        val dailyIsApp: Boolean,
         val validScore: Int?,
         val totalScore: Int?,
     )
@@ -120,13 +186,19 @@ class TaskController(
         var dailyAdId = ""
         var dailyScore = 5
         var dailyToken = ""
+        var dailyIsApp = true
         var validScore: Int? = null
         var totalScore: Int? = null
         val todayStart = getTodayStart(currentTimeMillis())
         for (tok in tokens) {
+            // token 与通道必须配对：appToken 走 1,1，积分 token 走 1,5。
+            // 上游此前对两个 token 都按 1,1 请求，不仅列表可能取不全，
+            // 更关键的是后面 score-send 会拿错通道签名，服务端判「验签失败」。
+            // 积分 token 与 appToken 相同的场景（只登录了 App 渠道）按 App 通道处理。
+            val isApp = tok == appToken
             val result =
                 try {
-                    api.getMissionList(tok)
+                    api.getMissionList(tok, isApp)
                 } catch (e: Exception) {
                     onLogError("fetchMergedMissions.missionLst", e)
                     continue
@@ -135,6 +207,7 @@ class TaskController(
                 dailyAdId = result.dailyAdId
                 dailyScore = result.dailyScore
                 dailyToken = tok
+                dailyIsApp = isApp
             }
             weekMask = weekMask or result.weekMask
             result.validScore?.let { v -> validScore = validScore?.let { maxOf(it, v) } ?: v }
@@ -156,6 +229,7 @@ class TaskController(
                             dailyCompleted = done,
                             isDailySignin = m.isDailySignin,
                             sourceToken = tok,
+                            isAppChannel = isApp,
                         )
                 } else {
                     val keepExisting = existing.limit > 0 || m.limit <= 0
@@ -165,7 +239,9 @@ class TaskController(
                             score = maxOf(existing.score, m.score),
                             limit = if (keepExisting) existing.limit else m.limit,
                             dailyCompleted = maxOf(existing.dailyCompleted, done),
+                            // token 与通道必须同进同出，不能只换其中一个
                             sourceToken = if (keepExisting) existing.sourceToken else tok,
+                            isAppChannel = if (keepExisting) existing.isAppChannel else isApp,
                         )
                 }
             }
@@ -176,6 +252,7 @@ class TaskController(
             dailyAdId = dailyAdId,
             dailyScore = dailyScore,
             dailyToken = dailyToken,
+            dailyIsApp = dailyIsApp,
             validScore = validScore,
             totalScore = totalScore,
         )
@@ -286,9 +363,11 @@ class TaskController(
                 // 等通知权限弹窗关闭（无论是否授权）后再开始，保证实时动态/前台服务通知能正常展示
                 requestNotificationPermission()
                 RunNotifications.updateTask(0)
+                var runEarnings: Earnings? = null
                 try {
                     addTaskLog("正在加载任务列表...")
                     val merged = fetchMergedMissions()
+                    if (!isCurrentAccount()) throw CancellationException("账号已切换")
                     if (merged.validScore != null || merged.totalScore != null) {
                         setState {
                             it.copy(
@@ -302,26 +381,40 @@ class TaskController(
                     }
                     val missionList = merged.missions
                     missions = missionList
+                    val initialPoints = pointsFor(account)
+                    if (!isCurrentAccount()) throw CancellationException("账号已切换")
+                    val earnings = Earnings(account, initialPoints.total)
+                    runEarnings = earnings
+                    setState { it.copy(points = initialPoints) }
                     var gained = 0
 
-                    gained += runDailySignin(merged, uid)
+                    gained = runDailySignin(merged, uid, earnings)
 
                     val validMissions =
                         missionList.filter {
                             !it.isDailySignin && it.limit > 0 && it.score > 0 &&
-                                it.sourceToken.isNotEmpty()
+                                it.sourceToken.isNotEmpty() &&
+                                // 这类任务涉及金融营销，直接跳过（与下游一致的安全防护）
+                                listOf("免费权益", "借贷", "贷款").none { name -> name in it.name }
                         }
                     addTaskLog("共 ${validMissions.size} 个可执行任务")
-                    val execResult = runMissions(validMissions, uid, gained)
-                    gained = execResult.gained
+                    runMissions(validMissions, uid, gained, earnings)
+                    gained = verifyPoints(earnings)
 
                     if (isActive && isCurrentAccount()) {
-                        addTaskLog("任务完成，共获得 $gained 积分")
-                        onToast("积分任务已完成，共获得 $gained 积分")
+                        val latest = reloadMissionsAndReturn()
+                        val resultText =
+                            if (earnings.queryFailed) {
+                                "任务请求结束，到账核验失败，已核验 $gained 分"
+                            } else {
+                                "任务请求结束，已核验本轮期间增加 $gained 分"
+                            }
+                        addTaskLog(resultText)
+                        onToast(resultText)
                         setState {
                             it.copy(
-                                taskCompleted = true,
-                                points = it.points.copy(available = (it.points.available ?: 0) + gained),
+                                taskCompleted = !earnings.queryFailed && latest != null &&
+                                    isAllTasksCompleted(latest.missions, latest.weekMask),
                             )
                         }
                         onReloadScores()
@@ -330,12 +423,16 @@ class TaskController(
                     if (isCurrentAccount()) addTaskLog("任务已停止")
                 } catch (e: Exception) {
                     if (isCurrentAccount()) {
+                        runEarnings?.let { verifyPoints(it) }
                         addTaskLog("任务执行异常: ${e.message}")
                         onError("任务执行失败: ${e.message}")
                     }
                 } finally {
                     RunNotifications.removeTask()
-                    if (isCurrentAccount()) onLoadingChange(false)
+                    if (isCurrentAccount()) {
+                        onLoadingChange(false)
+                        onReloadScores()
+                    }
                     if (taskJob === currentCoroutineContext()[Job]) taskJob = null
                 }
             }
@@ -343,11 +440,12 @@ class TaskController(
 
     /**
      * 每日签到阶段。今日已签或缺少签到凭证时直接跳过。
-     * 返回本轮新增积分（成功才计入），调用方累加到总收益。
+     * 返回截至当前已核验的累计增量，不按任务标称分数累计。
      */
     private suspend fun runDailySignin(
         merged: MergedMissions,
         uid: String,
+        earnings: Earnings,
     ): Int {
         if (merged.dailyAdId.isBlank() || merged.dailyToken.isEmpty()) return 0
         val signToken = merged.dailyToken
@@ -363,20 +461,18 @@ class TaskController(
             delay(wait.milliseconds)
         }
         addTaskLog("每日签到: 执行中...")
-        val signResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
+        val signResult = api.signIn(signToken, uid, weekDay, merged.dailyAdId, merged.dailyScore, signToken == earnings.account.appToken)
         if (signResult.success) {
-            RunNotifications.updateTask(merged.dailyScore)
-            addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
-            return merged.dailyScore
+            addTaskLog("每日签到请求成功，正在核验到账")
+            return verifyPoints(earnings)
         }
         if (signResult.code == -98) {
             addTaskLog("每日签到: 请求频繁，等待60秒重试...")
             delay(60.seconds)
-            val retryResult = withNetworkRetry { api.signIn(signToken, uid, weekDay, merged.dailyAdId) }
+            val retryResult = api.signIn(signToken, uid, weekDay, merged.dailyAdId, merged.dailyScore, signToken == earnings.account.appToken)
             if (retryResult.success) {
-                RunNotifications.updateTask(merged.dailyScore)
-                addTaskLog("每日签到: 成功 +${merged.dailyScore}分")
-                return merged.dailyScore
+                addTaskLog("每日签到请求成功，正在核验到账")
+                return verifyPoints(earnings)
             }
             addTaskLog("每日签到: 失败 ${retryResult.message}")
         } else {
@@ -390,6 +486,7 @@ class TaskController(
         validMissions: List<MissionInfo>,
         uid: String,
         startGained: Int,
+        earnings: Earnings,
     ): MissionRunResult {
         var gained = startGained
         for (mission in validMissions) {
@@ -401,12 +498,13 @@ class TaskController(
                 continue
             }
             try {
-                gained = runMissionRounds(mission, uid, gained)
+                gained = runMissionRounds(mission, uid, gained, earnings)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // 单个任务失败不中断整轮，继续后续任务
-                addTaskLog("[${mission.name}] 执行异常: ${e.message}")
+                // 网络结果不明确时停止本轮，先核对到账，避免重复提交
+                addTaskLog("[${mission.name}] 请求结果不明确，停止本轮并刷新积分")
+                throw e
             }
         }
         return MissionRunResult(gained)
@@ -417,6 +515,7 @@ class TaskController(
         mission: MissionInfo,
         uid: String,
         startGained: Int,
+        earnings: Earnings,
     ): Int {
         var gained = startGained
         val execToken = mission.sourceToken
@@ -425,16 +524,15 @@ class TaskController(
             if (!currentCoroutineContext().isActive) break
             addTaskLog("[${mission.name}] ($round/$maxCount) 执行中...")
             delay(30.seconds)
-            var execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
+            var execResult = api.executeMission(execToken, uid, mission.adId, mission.score, execToken == earnings.account.appToken)
             if (execResult.code == -98) {
                 addTaskLog("[${mission.name}] 请求频繁，等待60秒重试...")
                 delay(60.seconds)
-                execResult = withNetworkRetry { api.executeMission(execToken, uid, mission.adId) }
+                execResult = api.executeMission(execToken, uid, mission.adId, mission.score, execToken == earnings.account.appToken)
             }
             if (execResult.success) {
-                gained += mission.score
-                RunNotifications.updateTask(gained)
-                addTaskLog("[${mission.name}] ($round/$maxCount) 成功 +${mission.score}分")
+                addTaskLog("[${mission.name}] ($round/$maxCount) 请求成功，正在核验到账")
+                gained = verifyPoints(earnings)
                 missions =
                     missions.map {
                         if (it.adId == mission.adId) it.copy(dailyCompleted = it.dailyCompleted + 1) else it

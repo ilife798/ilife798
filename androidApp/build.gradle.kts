@@ -55,6 +55,9 @@ android {
 
         buildConfigField("String", "API_GATEWAY", "\"${resolveBuildSecret("API_GATEWAY", "API_GATEWAY")}\"")
         buildConfigField("String", "SIGN_SALT", "\"${resolveBuildSecret("SIGN_SALT", "SIGN_SALT")}\"")
+        // 小程序通道（ApplicationType 1,5）的独立盐。与 SIGN_SALT 不可互换：
+        // 通道配错盐、或通道配错 VersionCode(2.0.83)，服务端都判「验签失败」。
+        buildConfigField("String", "MINI_SIGN_SALT", "\"${resolveBuildSecret("MINI_SIGN_SALT", "MINI_SIGN_SALT")}\"")
         buildConfigField("String", "API_CID", "\"${resolveBuildSecret("API_CID", "API_CID")}\"")
         // 微信兜底 appId：与官方一致，但只能通过编译时环境/密钥注入，仓库内不留明文。
         buildConfigField(

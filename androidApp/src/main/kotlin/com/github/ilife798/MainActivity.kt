@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
             gateway = BuildConfig.API_GATEWAY,
             salt = BuildConfig.SIGN_SALT,
             clientId = BuildConfig.API_CID,
+            // 小程序通道（1,5）的独立盐，缺省空串；未注入时积分通道的 score-send 必然验签失败
+            miniSalt = BuildConfig.MINI_SIGN_SALT,
         )
 
         handleIntent(intent)

@@ -15,6 +15,8 @@ fun MainViewController(): UIViewController {
         gateway = IosBuildConfig.API_GATEWAY,
         salt = IosBuildConfig.SIGN_SALT,
         clientId = IosBuildConfig.API_CID,
+        // 小程序通道（1,5）的独立盐，缺省空串；未注入时积分通道的 score-send 必然验签失败
+        miniSalt = IosBuildConfig.MINI_SIGN_SALT,
     )
     return ComposeUIViewController { App() }
 }

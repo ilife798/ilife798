@@ -9,6 +9,7 @@ import com.github.ilife798.data.model.DeviceOption
 import com.github.ilife798.data.model.DeviceSubState
 import com.github.ilife798.data.model.PayChannel
 import com.github.ilife798.data.model.PayChannelType
+import com.github.ilife798.data.model.PointsInfo
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.WalletAccount
@@ -25,6 +26,7 @@ import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.fromHttpToGmtDate
 import io.ktor.util.AttributeKey
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -81,7 +83,42 @@ class IlifeApi(
     ) {
         header("Authorization", token)
         header("ApplicationType", appType)
+        // score-send 等写接口会校验版本号与通道是否配对，只读接口则完全不敏感。
+        // 配对错误会让服务端判「验签失败」，因此统一在头部显式下发。
+        headers["VersionCode"] = if (appType == APP_TYPE_DEVICE) ApiConfig.VERSION_CODE else ApiConfig.MINI_LOGIN_VERSION
         attributes.put(requestAuthTokenKey, token)
+    }
+
+    /*
+     * 积分接口专用请求头：在 apiHeaders 基础上把小程序版本号换成 MINI_VERSION。
+     *
+     * 小程序通道有两个版本号，用途不同：
+     *   登录（acc/login）        → MINI_LOGIN_VERSION = 2.0.83
+     *   业务（mission-lst / acc-score / score-send）→ MINI_VERSION = 2.0.178
+     * 交叉搭配会被服务端判「验签失败」。App 通道则始终是 VERSION_CODE = 3.1.9。
+     */
+    private fun HttpRequestBuilder.scoreHeaders(
+        token: String,
+        isApp: Boolean,
+    ) {
+        apiHeaders(token, if (isApp) APP_TYPE_DEVICE else APP_TYPE_POINTS)
+        headers["VersionCode"] = if (isApp) ApiConfig.VERSION_CODE else ApiConfig.MINI_VERSION
+    }
+
+    /*
+     * 服务端时间校准：签名里的 30 秒时间桶必须与服务端时钟对齐，
+     * 本地时钟不准就会签出错误的桶，服务端判「验签失败」。
+     * 只对 App 通道校准（score-send 只有 App 通道带 &s=1 走签名强校验）。
+     */
+    private var appTimeOffsetMillis = 0L
+
+    private fun calibrateAppTime(response: HttpResponse) {
+        if (response.call.request.headers["ApplicationType"] != APP_TYPE_DEVICE) return
+        response.headers["Date"]?.let { date ->
+            runCatching { date.fromHttpToGmtDate().timestamp }.getOrNull()?.let {
+                appTimeOffsetMillis = it - currentTimeMillis()
+            }
+        }
     }
 
     // 服务端在登录态失效时对所有需鉴权接口返回 code = -99；回调携带发起请求的 token，
@@ -96,6 +133,7 @@ class IlifeApi(
         notifyExpiry: Boolean = true,
         reportError: Boolean = true,
     ): JsonObject {
+        calibrateAppTime(response)
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
         if (notifyExpiry) {
             checkSessionExpired(
@@ -165,10 +203,21 @@ class IlifeApi(
         isAlipay: Boolean,
     ): LoginResult {
         val appType = if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE
+        val request = LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid)
+        // 3.1.9 起 acc/login 也校验 sign：对与请求体同源的参数表做签名后拼到 query 上
+        val sign =
+            Signer.signQuery(
+                mapOf(
+                    "openCode" to request.openCode,
+                    "authCode" to request.authCode,
+                    "un" to request.un,
+                    "cid" to request.cid,
+                ),
+            )
         val response =
-            client.apiPost("acc/login") {
+            client.apiPost("acc/login?sign=$sign") {
                 contentType(ContentType.Application.Json)
-                setBody(requestJson.encodeToString(LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid)))
+                setBody(requestJson.encodeToString(request))
                 header("ApplicationType", appType)
             }
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
@@ -571,14 +620,55 @@ class IlifeApi(
     }
 
     // 积分与任务
-    suspend fun getMissionList(token: String): MissionListResult {
+    // isApp 决定走哪个通道：appToken 属于 "1,1"，积分 token 属于 "1,5"。
+    // 两个 token 混用同一通道会让 dailyToken / sourceToken 记错来源，
+    // 后续 score-send 签名里的通道与 token 就不匹配，服务端判「验签失败」。
+
+    // 积分汇总接口 acc/score/acc-score 的原始 data 对象，供 getMissionList 复用
+    private suspend fun getPointsBody(
+        token: String,
+        isApp: Boolean,
+    ): JsonObject {
+        val response = client.apiGet("acc/score/acc-score") { scoreHeaders(token, isApp) }
+        val body = bodyJson(response, reportError = false)
+        if (body.intOrNull("code") != 0) throw IllegalStateException("积分查询失败")
+        return body.obj("data") ?: throw IllegalStateException("积分查询响应不完整")
+    }
+
+    /*
+     * 积分汇总：acc/score/acc-score。
+     *
+     * 下游 dong-dong6/ilife798 v1.3.15 的到账核验就建立在这个接口上——
+     * 不用客户端自己累计 `gained += score`，而是回查 totalScore 的真实增量，
+     * 这样能区分「请求成功但没到账」与「真的到账了」。
+     */
+    suspend fun getPointsSummary(
+        token: String,
+        isApp: Boolean,
+    ): PointsInfo {
+        val data = getPointsBody(token, isApp)
+        return PointsInfo(data.intOrNull("validScore"), data.intOrNull("totalScore"))
+    }
+
+    suspend fun getMissionList(
+        token: String,
+        isApp: Boolean = true,
+    ): MissionListResult {
         val response =
             client.apiGet("acc/score/mission-lst") {
-                apiHeaders(token, APP_TYPE_DEVICE)
+                scoreHeaders(token, isApp)
             }
         val body = bodyJson(response)
         val data = body.obj("data") ?: return MissionListResult(emptyList())
-        val accScore = data.obj("accScoreRsp")
+        // 积分汇总走独立的 acc/score/acc-score 接口，比从 mission-lst 里取更可靠
+        val accScore =
+            try {
+                getPointsBody(token, isApp)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
         val validScore = accScore?.intOrNull("validScore")
         val totalScore = accScore?.intOrNull("totalScore")
         val weekMask = accScore?.obj("daily")?.intOrNull("week") ?: 0
@@ -643,28 +733,49 @@ class IlifeApi(
         token: String,
         uid: String,
         adId: String,
-    ): DevResult = postScoreSend(token, uid, adId, requestJson.encodeToString(MissionExecRequest(adId)))
+        score: Int,
+        isApp: Boolean,
+    ): DevResult =
+        postScoreSend(
+            token,
+            uid,
+            adId,
+            requestJson.encodeToString(MissionExecRequest.forChannel(adId, score, isApp)),
+            isApp,
+        )
 
     suspend fun signIn(
         token: String,
         uid: String,
         weekDay: Int,
         adId: String,
-    ): DevResult = postScoreSend(token, uid, adId, requestJson.encodeToString(SignInRequest(weekDay, adId)))
-
+        score: Int,
+        isApp: Boolean,
+    ): DevResult =
+        postScoreSend(
+            token,
+            uid,
+            adId,
+            SignInRequest.forChannel(weekDay, adId, score, isApp).toJson(),
+            isApp,
+        )
     // 执行任务与签到共用的 score-send 请求
+    // isApp 必须与 token 实际所属通道一致：签名用哪个盐、URL 带不带 &s=1、
+    // VersionCode 用 3.1.9 还是 2.0.178，三者都由它决定，任一错配都会被判验签失败。
     private suspend fun postScoreSend(
         token: String,
         uid: String,
         adId: String,
         body: String,
+        isApp: Boolean,
     ): DevResult {
-        val sign = Signer.sign(adId, token, uid)
+        // 签名用校准后的服务端时间，本地时钟不准会导致时间桶错误
+        val sign = Signer.task(adId, token, uid, isApp, currentTimeMillis() + if (isApp) appTimeOffsetMillis else 0L)
         val response =
-            client.apiPost("acc/score/score-send?sign=$sign&s=1") {
+            client.apiPost("acc/score/score-send?sign=$sign${if (isApp) "&s=1" else ""}") {
                 contentType(ContentType.Application.Json)
                 setBody(body)
-                apiHeaders(token, APP_TYPE_DEVICE)
+                scoreHeaders(token, isApp)
             }
         return parseDevResult(response.bodyAsText(), reportError = false, token = token)
     }

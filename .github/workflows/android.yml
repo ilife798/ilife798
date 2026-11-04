@@ -56,11 +56,19 @@ jobs:
         env:
           API_GATEWAY: ${{ secrets.API_GATEWAY }}
           SIGN_SALT: ${{ secrets.SIGN_SALT }}
+          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
           API_CID: ${{ secrets.API_CID }}
         run: |
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
+          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
           printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
+          # 缺密钥时构建仍然成功，但积分/签到等需要签名的接口必然验签失败（服务端返回 code=-1 请升级最新版APP）。
+          # 这里显式告警，避免再次产出「能装但功能不可用」的包。
+          # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
+          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
+            grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但需签名的接口会验签失败"
+          done
 
       - name: Check formatting, tests and lint
         run: ./gradlew spotlessCheck testAndroidHostTest lintDebug --no-daemon --stacktrace
@@ -114,11 +122,19 @@ jobs:
         env:
           API_GATEWAY: ${{ secrets.API_GATEWAY }}
           SIGN_SALT: ${{ secrets.SIGN_SALT }}
+          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
           API_CID: ${{ secrets.API_CID }}
         run: |
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
+          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
           printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
+          # 缺密钥时构建仍然成功，但积分/签到等需要签名的接口必然验签失败（服务端返回 code=-1 请升级最新版APP）。
+          # 这里显式告警，避免再次产出「能装但功能不可用」的包。
+          # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
+          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
+            grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但需签名的接口会验签失败"
+          done
 
       - name: Configure release signing
         env:

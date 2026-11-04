@@ -1169,7 +1169,7 @@ class AppViewModel : ViewModel() {
         if (token.isEmpty()) return null
         return viewModelScope.launch {
             try {
-                val result = api.getMissionList(token)
+                val result = api.getMissionList(token, isApp = token == state.account.appToken)
                 if (currentToken() != token) return@launch
                 state =
                     state.copy(

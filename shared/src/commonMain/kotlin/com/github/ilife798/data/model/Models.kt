@@ -101,6 +101,10 @@ data class MissionInfo(
     val dailyCompleted: Int = 0,
     val isDailySignin: Boolean = false,
     val sourceToken: String = "",
+    // 该任务来自哪个通道：true = App（ApplicationType 1,1），false = 积分/小程序（1,5）。
+    // score-send 的签名盐、VersionCode、URL 后缀都由通道决定，必须与 sourceToken 严格配对，
+    // 否则服务端一律判「验签失败」——这就是 issue #3 在 iOS 上必现的原因。
+    val isAppChannel: Boolean = true,
 )
 
 data class ScoreRecord(
