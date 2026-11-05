@@ -64,9 +64,15 @@ class ApiRequestsTest {
                 LoginRequest(authCode = "a", un = "u", cid = "c"),
             ),
         )
+        // SignInRequest 不走 @Serializable：字段名按通道变化（App→weekday，小程序→weekDay），
+        // 改用手动 toJson()，这里验证两个通道的字段名契约。
         assertEquals(
-            """{"weekday":2,"adId":"ad"}""",
-            json.encodeToString(SignInRequest.serializer(), SignInRequest(weekDay = 2, adId = "ad")),
+            """{"weekday":2,"adId":"ad","addScore":5,"addScoreType":1}""",
+            SignInRequest.forChannel(weekDay = 2, adId = "ad", score = 5, isApp = true).toJson(),
+        )
+        assertEquals(
+            """{"weekDay":2,"adId":"ad"}""",
+            SignInRequest.forChannel(weekDay = 2, adId = "ad", score = 5, isApp = false).toJson(),
         )
         assertEquals(
             """{"un":"u","authCode":"a","s":"s"}""",
