@@ -19,8 +19,17 @@ const val APP_TYPE_POINTS = "1,5" // 积分登录及小程序积分请求渠道
  *   ApplicationType "1,1"（App）      → VersionCode "3.1.9"
  *   ApplicationType "1,5"（小程序）   → 登录走 2.0.83，业务走 2.0.178
  *
- * 历史：3.1.9 官方包里的 aB3dF6hJ9kL2nP5rT8wY1eG4iM7oQ0v 确实已失效，
- * 且 acc/login 本身不校验 sign（详见 Signer.login 注释）。
+ * ★ acc/login 会校验 sign（2026-11-05/06 实测）：
+ *   1,5 通道不带 sign →「请升级最新版应用」，带正确的 mini 盐 sign → 成功（stype:5）。
+ *
+ * ★ 平台盐矩阵（2026-11-06 实测，服务端按 UA 前缀识别平台）：
+ *
+ *           1,1 通道（App）      1,5 通道（小程序）
+ *   Android  SIGN_SALT          MINI_SIGN_SALT
+ *   iOS      IOS_SIGN_SALT      MINI_SIGN_SALT（与 Android 同一个，支付宝 JS 跨平台通用）
+ *
+ *   iOS 误用 Android 盐走 1,1 时登录返回「验签失败」，al.dtype 会标成 1；
+ *   用对盐后 al.dtype = 2。iOS 通过 IOS_SIGN_SALT 独立注入（见 MainViewController）。
  */
 object ApiConfig {
     var baseUrl: String = ""

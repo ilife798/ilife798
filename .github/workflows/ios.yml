@@ -69,17 +69,21 @@ jobs:
           API_GATEWAY: ${{ secrets.API_GATEWAY }}
           SIGN_SALT: ${{ secrets.SIGN_SALT }}
           MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
+          IOS_SIGN_SALT: ${{ secrets.IOS_SIGN_SALT }}
           API_CID: ${{ secrets.API_CID }}
         run: |
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
           printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
+          printf 'IOS_SIGN_SALT=%s\n' "$IOS_SIGN_SALT" >> secrets.properties
           printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
 
       - name: Warn on missing secrets
         run: |
           # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
+          # IOS_SIGN_SALT 是 iOS 平台的专属盐（服务端按 UA 选盐），缺失会回退 SIGN_SALT，
+          # 表现为 iOS 登录/签到「验签失败」。
+          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
             grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但产出的 IPA 访问后端会失败"
           done
 
@@ -152,17 +156,20 @@ jobs:
           API_GATEWAY: ${{ secrets.API_GATEWAY }}
           SIGN_SALT: ${{ secrets.SIGN_SALT }}
           MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
+          IOS_SIGN_SALT: ${{ secrets.IOS_SIGN_SALT }}
           API_CID: ${{ secrets.API_CID }}
         run: |
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
           printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
+          printf 'IOS_SIGN_SALT=%s\n' "$IOS_SIGN_SALT" >> secrets.properties
           printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
 
       - name: Fail on missing release secrets
         run: |
           # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
+          # IOS_SIGN_SALT 是 iOS 平台专属盐（服务端按 UA 选盐），发版必填。
+          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
             grep -q "^$f=..*$" secrets.properties || { echo "::error::release secrets.$f 未配置"; exit 1; }
           done
 

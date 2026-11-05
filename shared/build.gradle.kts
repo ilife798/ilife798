@@ -43,6 +43,13 @@ val iosApiGateway = resolveIosBuildConfig("ILIFE798_API_GATEWAY", "API_GATEWAY")
 val iosSignSalt = resolveIosBuildConfig("ILIFE798_SIGN_SALT", "SIGN_SALT")
 // 小程序通道（ApplicationType 1,5）的独立盐，缺省空串
 val iosMiniSignSalt = resolveIosBuildConfig("ILIFE798_MINI_SIGN_SALT", "MINI_SIGN_SALT")
+/*
+ * iOS 平台的验签盐（2026-11-06 实测确认）：
+ * 服务端按 UA 平台选盐——Android UA 用 SIGN_SALT，iOS UA 用 iOS 专属盐。
+ * 用 Android 盐在 iOS 上登录/签到一律「验签失败」。
+ * 缺省空串时 MainViewController 回退到 SIGN_SALT（保持旧行为，便于灰度）。
+ */
+val iosPlatformSignSalt = resolveIosBuildConfig("ILIFE798_IOS_SIGN_SALT", "IOS_SIGN_SALT")
 val iosApiCid = resolveIosBuildConfig("ILIFE798_API_CID", "API_CID")
 
 val generateIosBuildConfig =
@@ -52,10 +59,12 @@ val generateIosBuildConfig =
         val apiGateway = iosApiGateway
         val signSalt = iosSignSalt
         val miniSignSalt = iosMiniSignSalt
+        val platformSignSalt = iosPlatformSignSalt
         val apiCid = iosApiCid
         inputs.property("apiGateway", apiGateway)
         inputs.property("signSalt", signSalt)
         inputs.property("miniSignSalt", miniSignSalt)
+        inputs.property("platformSignSalt", platformSignSalt)
         inputs.property("apiCid", apiCid)
         outputs.dir(generatedDir)
         doLast {
@@ -78,6 +87,7 @@ val generateIosBuildConfig =
                 |    const val API_GATEWAY: String = "${escapeKotlinStringLiteral(apiGateway)}"
                 |    const val SIGN_SALT: String = "${escapeKotlinStringLiteral(signSalt)}"
                 |    const val MINI_SIGN_SALT: String = "${escapeKotlinStringLiteral(miniSignSalt)}"
+                |    const val IOS_SIGN_SALT: String = "${escapeKotlinStringLiteral(platformSignSalt)}"
                 |    const val API_CID: String = "${escapeKotlinStringLiteral(apiCid)}"
                 |}
                 """.trimMargin(),

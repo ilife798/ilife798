@@ -11,11 +11,19 @@ import platform.UIKit.UIViewController
 @Suppress("ktlint:standard:function-naming")
 fun MainViewController(): UIViewController {
     AppStorage.instance = PersistentStorage()
+    /*
+     * 平台盐（2026-11-06 实测）：
+     *   1,1 通道 → iOS 专属盐 IOS_SIGN_SALT（服务端按 UA 平台选盐；
+     *              误用 Android 盐时登录返回「验签失败」，dtype 也会标成 1）
+     *   1,5 通道 → 与 Android 相同的 MINI_SIGN_SALT（小程序是同一份支付宝 JS，盐跨平台通用；
+     *              实测 iOS UA + mini 盐登录成功，dtype=2 + stype=5）
+     * 未注入 IOS_SIGN_SALT 时回退 SIGN_SALT，保持与旧构建一致的行为。
+     */
+    val iosSalt = IosBuildConfig.IOS_SIGN_SALT.ifBlank { IosBuildConfig.SIGN_SALT }
     ApiConfig.init(
         gateway = IosBuildConfig.API_GATEWAY,
-        salt = IosBuildConfig.SIGN_SALT,
+        salt = iosSalt,
         clientId = IosBuildConfig.API_CID,
-        // 小程序通道（1,5）的独立盐，缺省空串；未注入时积分通道的 score-send 必然验签失败
         miniSalt = IosBuildConfig.MINI_SIGN_SALT,
     )
     return ComposeUIViewController { App() }

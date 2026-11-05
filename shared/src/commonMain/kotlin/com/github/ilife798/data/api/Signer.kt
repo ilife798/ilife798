@@ -5,16 +5,16 @@ import com.github.ilife798.util.md5
 
 object Signer {
     /*
-     * 登录签名：md5("authCode={code}&un={phone}{盐}")，盐用 App 通道的 SIGN_SALT。
+     * 登录签名：md5("authCode={code}&un={phone}{盐}")。
      *
-     * ⚠ 实测结论（2026-11-05，直连 i.ilife798.com 验证）：
-     *   acc/login **不校验 sign**。同一手机号+错误短信码，带不带 sign、
-     *   带假 sign、VersionCode 3.1.9 还是 3.1.10，四种情况返回完全一致的
-     *   业务错误 {"code":-1,"msg":"短信验证码错误"}。
-     *   服务端只要认得请求就会进入业务校验，验签层并不拦截登录。
+     * 盐按通道/平台取：
+     *   Android 1,1 → SIGN_SALT      Android 1,5 → MINI_SIGN_SALT
+     *   iOS（1,1 与 1,5 同一套）→ IOS_SIGN_SALT（见 MainViewController 注入）
      *
-     * 因此本函数目前不是登录的必需品，保留为与官方 App 保持一致的实现
-     * （官方确实会带这个 sign，只是服务端不校验）。
+     * ⚠ 2026-11-05/06 实测修正：acc/login **会校验 sign**。
+     *   错误短信码时验签层不报错（先校验码），但短信码正确且 sign 缺失/错误时
+     *   1,5 通道返回「请升级最新版应用」、iOS 平台返回「验签失败」；
+     *   换成正确的通道盐后才返回 code:0。
      */
     fun login(
         phone: String,
