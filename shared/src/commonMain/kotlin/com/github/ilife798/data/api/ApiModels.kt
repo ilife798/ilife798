@@ -37,6 +37,7 @@ data class DeviceDto(
     val name: String,
     val geneStatus: Int = 0,
     val dtype: Int = 0,
+    val deviceStatus: Int = 1,
 )
 
 data class MasterResult(

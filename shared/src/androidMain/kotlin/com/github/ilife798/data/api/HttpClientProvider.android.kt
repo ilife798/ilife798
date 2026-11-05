@@ -11,8 +11,19 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
-actual fun createHttpClient(): HttpClient =
+actual fun createHttpClient(): HttpClient = createAndroidHttpClient()
+
+internal fun createAndroidHttpClient(
+    allowConnectionRetry: Boolean = true,
+    pool: okhttp3.ConnectionPool? = null,
+): HttpClient =
     HttpClient(OkHttp) {
+        engine {
+            config {
+                retryOnConnectionFailure(allowConnectionRetry)
+                pool?.let { connectionPool(it) }
+            }
+        }
         install(ContentNegotiation) {
             json(
                 Json {
@@ -30,6 +41,6 @@ actual fun createHttpClient(): HttpClient =
             contentType(ContentType.Application.Json)
             header("Accept-Language", "zh-Hans-CN;q=1")
             header("User-Agent", ApiConfig.USER_AGENT)
-            header("VersionCode", ApiConfig.VERSION_CODE)
+            if (headers["VersionCode"] == null) header("VersionCode", ApiConfig.VERSION_CODE)
         }
     }

@@ -140,7 +140,7 @@ private fun DeviceCard(
     val homeType = viewModel.homeDeviceType
     val devices =
         remember(allDevices, homeType) {
-            allDevices.filter { HomeDeviceType.fromDeviceType(it.dtype) == homeType }
+            allDevices.filter { homeType.matches(it.dtype) }
         }
     val isLoggedIn = viewModel.state.account.hasAnyToken
 
@@ -216,7 +216,10 @@ private fun DeviceCard(
             }
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             if (devices.isEmpty()) {
-                EmptyStateText(isLoggedIn, emptyText = "暂无${homeType.label}设备")
+                EmptyStateText(
+                    isLoggedIn,
+                    emptyText = if (allDevices.isNotEmpty()) "当前分类无匹配设备，可在右上角切换为“全部”" else "暂无收藏设备，可点击右上角添加",
+                )
             } else {
                 devices.forEachIndexed { index, device ->
                     if (index > 0) {

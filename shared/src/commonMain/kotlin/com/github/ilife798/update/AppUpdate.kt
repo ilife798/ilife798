@@ -1,16 +1,15 @@
 package com.github.ilife798.update
 
+import com.github.ilife798.AppRepository
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import kotlinx.serialization.json.Json
 
-private const val RELEASES_API = "https://api.github.com/repos/ilife798/ilife798/releases/latest"
-
 object AppUpdate {
     // 更新移交回退：未找到本平台安装包时打开发布页。
-    const val RELEASES_PAGE_URL = "https://github.com/ilife798/ilife798/releases"
+    const val RELEASES_PAGE_URL: String = AppRepository.RELEASES_URL
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -19,7 +18,7 @@ object AppUpdate {
     suspend fun fetchLatestRelease(): GithubRelease {
         val body =
             client
-                .get(RELEASES_API) {
+                .get(AppRepository.LATEST_RELEASE_API_URL) {
                     header(HttpHeaders.Accept, "application/vnd.github+json")
                     header(HttpHeaders.UserAgent, "ilife798-update")
                 }.bodyAsText()

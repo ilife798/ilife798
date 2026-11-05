@@ -26,7 +26,8 @@ env:
 jobs:
   validate:
     name: Validate iOS build
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    # Fork 默认只自动构建 Android；iOS 仍可手动运行。
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.repository == 'ilife798/ilife798' || github.event_name == 'workflow_dispatch') }}
     runs-on: macos-26
     timeout-minutes: 40
 
@@ -97,7 +98,7 @@ jobs:
 
   release:
     name: Build and publish iOS release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'ilife798/ilife798' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-26
     timeout-minutes: 40
     permissions:

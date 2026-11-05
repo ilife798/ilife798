@@ -77,6 +77,36 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".DeviceWidgetProvider"
+            android:exported="false"
+            android:label="@string/device_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/device_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".DeviceWidgetStartService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".DeviceWidgetCollectionService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <activity
+            android:name=".DeviceWidgetConfigureActivity"
+            android:exported="true"
+            android:label="@string/device_widget_choose">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name="com.github.ilife798.DeviceTileService"
             android:exported="true"

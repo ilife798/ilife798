@@ -19,7 +19,10 @@ object Signer {
     fun login(
         phone: String,
         code: String,
-    ): String = md5("authCode=$code&un=$phone${ApiConfig.salt}")
+    ): String {
+        require(ApiConfig.salt.isNotBlank()) { "SIGN_SALT 未配置" }
+        return md5("authCode=$code&un=$phone${ApiConfig.salt}")
+    }
 
     /*
      * 任务签名：md5(adId + 时间桶 + token 尾 8 位 + uid 尾 8 位 + 盐)，盐按通道取。
@@ -34,7 +37,11 @@ object Signer {
         uid: String,
         isApp: Boolean,
         now: Long = currentTimeMillis(),
-    ): String = signAt(adId, token, uid, now, if (isApp) ApiConfig.salt else ApiConfig.miniSalt)
+    ): String {
+        val salt = if (isApp) ApiConfig.salt else ApiConfig.miniSalt
+        require(salt.isNotBlank()) { if (isApp) "SIGN_SALT 未配置" else "MINI_SIGN_SALT 未配置" }
+        return signAt(adId, token, uid, now, salt)
+    }
 
     fun sign(
         adId: String,

@@ -13,7 +13,6 @@ import com.github.ilife798.update.requestNotificationPermission
 import com.github.ilife798.util.currentTimeFormatted
 import com.github.ilife798.util.currentTimeMillis
 import com.github.ilife798.util.getDayOfWeek
-import com.github.ilife798.util.getTodayStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -137,40 +136,6 @@ class TaskController(
         val totalScore: Int?,
     )
 
-    // 按时间倒序分页拉取今日积分记录，统计各 adId 次数（遇到早于今日的记录即停止）
-    private suspend fun fetchTodayScoreCounts(
-        token: String,
-        todayStart: Long,
-    ): Map<String, Int> {
-        val counts = mutableMapOf<String, Int>()
-        val pageSize = 50
-        var page = 0
-        while (page < 5) {
-            val records =
-                try {
-                    api.getScoreList(token, page = page, size = pageSize).records
-                } catch (e: Exception) {
-                    onLogError("fetchTodayScoreCounts", e)
-                    break
-                }
-            if (records.isEmpty()) break
-            var reachedEarlier = false
-            for (score in records) {
-                val timeMs = score.time.toLongOrNull() ?: continue
-                if (timeMs < todayStart) {
-                    reachedEarlier = true
-                    continue
-                }
-                if (score.score > 0 && score.adId.isNotEmpty()) {
-                    counts[score.adId] = (counts[score.adId] ?: 0) + 1
-                }
-            }
-            if (reachedEarlier || records.size < pageSize) break
-            page++
-        }
-        return counts
-    }
-
     // 合并两个登录渠道（appToken 1,1 与 token 1,5）的任务列表，按 adId 去重并记录来源 token
     private suspend fun fetchMergedMissions(): MergedMissions {
         val account = getState().account
@@ -178,8 +143,8 @@ class TaskController(
         val pointsToken = account.token
         val tokens =
             buildList {
-                if (appToken.isNotEmpty()) add(appToken)
-                if (pointsToken.isNotEmpty() && pointsToken != appToken) add(pointsToken)
+                if (pointsToken.isNotEmpty()) add(pointsToken)
+                if (appToken.isNotEmpty() && appToken != pointsToken) add(appToken)
             }
         val merged = LinkedHashMap<String, MissionInfo>()
         var weekMask = 0
@@ -189,7 +154,7 @@ class TaskController(
         var dailyIsApp = true
         var validScore: Int? = null
         var totalScore: Int? = null
-        val todayStart = getTodayStart(currentTimeMillis())
+        var loadedChannels = 0
         for (tok in tokens) {
             // token 与通道必须配对：appToken 走 1,1，积分 token 走 1,5。
             // 上游此前对两个 token 都按 1,1 请求，不仅列表可能取不全，
@@ -199,10 +164,13 @@ class TaskController(
             val result =
                 try {
                     api.getMissionList(tok, isApp)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     onLogError("fetchMergedMissions.missionLst", e)
                     continue
                 }
+            loadedChannels++
             if (dailyToken.isEmpty() && result.dailyAdId.isNotBlank()) {
                 dailyAdId = result.dailyAdId
                 dailyScore = result.dailyScore
@@ -213,11 +181,9 @@ class TaskController(
             result.validScore?.let { v -> validScore = validScore?.let { maxOf(it, v) } ?: v }
             result.totalScore?.let { v -> totalScore = totalScore?.let { maxOf(it, v) } ?: v }
 
-            val todayCount = fetchTodayScoreCounts(tok, todayStart)
-
             for (m in result.missions) {
                 if (m.adId.isBlank()) continue
-                val done = maxOf(m.dailyCompleted, todayCount[m.adId] ?: 0)
+                val done = m.dailyCompleted
                 val existing = merged[m.adId]
                 if (existing == null) {
                     merged[m.adId] =
@@ -246,6 +212,7 @@ class TaskController(
                 }
             }
         }
+        check(loadedChannels > 0) { "未能读取任何渠道的任务进度，请检查登录或稍后重试" }
         return MergedMissions(
             missions = merged.values.toList(),
             weekMask = weekMask,
@@ -584,15 +551,6 @@ class TaskController(
             }
         }
     }
-
-    // 网络重试统一走 NetworkErrors.kt 的共享实现，此处只负责把重试写进任务日志
-    private suspend fun <T> withNetworkRetry(block: suspend () -> T): T =
-        withNetworkRetry(
-            onRetry = { seconds, attempt ->
-                addTaskLog("网络异常，$seconds 秒后重试($attempt/${NETWORK_RETRY_ATTEMPTS - 1})...")
-            },
-            block = block,
-        )
 
     private fun addTaskLog(message: String) {
         val time = currentTimeFormatted("HH:mm:ss")

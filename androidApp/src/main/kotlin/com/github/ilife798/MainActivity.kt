@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
         ActivityHolder.current = this
         AppStorage.instance = PersistentStorage(applicationContext)
         DeviceTile.controller = AndroidDeviceTileController(applicationContext)
+        DeviceWidgets.controller = AndroidDeviceWidgetController(applicationContext)
         ApiConfig.init(
             gateway = BuildConfig.API_GATEWAY,
             salt = BuildConfig.SIGN_SALT,
@@ -74,6 +75,14 @@ class MainActivity : ComponentActivity() {
             handleNdefIntent(intent)
         }
         when (intent?.action) {
+            IntentActions.ACTION_OPEN_WIDGET_DEVICE -> {
+                val deviceId = intent.getStringExtra(IntentActions.EXTRA_DEVICE_ID)
+                val accountKey = intent.getStringExtra(IntentActions.EXTRA_WIDGET_ACCOUNT)
+                if (!deviceId.isNullOrBlank() && !accountKey.isNullOrBlank()) {
+                    AppRequests.openWidgetDevice.request(DeviceWidgetTarget(accountKey, deviceId))
+                }
+            }
+
             IntentActions.ACTION_SCAN -> {
                 AppRequests.scan.request()
             }

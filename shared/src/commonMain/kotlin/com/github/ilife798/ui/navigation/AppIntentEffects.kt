@@ -29,6 +29,22 @@ fun AppIntentEffects(
         AppRequests.tagContent.consume()
     }
 
+    // 桌面小组件：校验并切换绑定账号，再打开设备详情。
+    val widgetDevice = AppRequests.openWidgetDevice.value
+    LaunchedEffect(widgetDevice) {
+        val target = widgetDevice ?: return@LaunchedEffect
+        if (!viewModel.selectWidgetAccount(target)) {
+            AppRequests.openWidgetDevice.consume()
+            return@LaunchedEffect
+        }
+        clearToRoot()
+        mainPagerState.animateToPage(0)
+        navigate(Page.DeviceDetail(target.deviceId))
+        // 导航可能复用同一设备页面；每次点击卡片都重新查询绑定账号下的详情。
+        viewModel.requestWidgetDeviceDetailRefresh()
+        AppRequests.openWidgetDevice.consume()
+    }
+
     // 快捷设置图块：回到首页并打开对应设备详情页
     val startDeviceId = AppRequests.startDevice.value
     LaunchedEffect(startDeviceId) {

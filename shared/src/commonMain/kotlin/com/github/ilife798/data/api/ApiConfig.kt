@@ -4,10 +4,10 @@ import com.github.ilife798.isIOS
 
 // ApplicationType
 const val APP_TYPE_DEVICE = "1,1" // 普通请求的固定值
-const val APP_TYPE_POINTS = "1,5" // 积分登录（acc/login）签发积分 token，普通请求不携带
+const val APP_TYPE_POINTS = "1,5" // 积分登录及小程序积分请求渠道
 
 /**
- * 签名盐（SIGN_SALT）只从构建期密钥注入，仓库内不留明文。
+ * 签名盐只从构建期密钥注入，仓库内不留明文。
  *
  * 待签名原文 = adId + 时间桶 + token 后 8 位 + uid 后 8 位 + 盐，取 md5；
  * 时间桶 = 30 * (nowMs / 30000)，即 30 秒粒度。
@@ -17,10 +17,10 @@ const val APP_TYPE_POINTS = "1,5" // 积分登录（acc/login）签发积分 tok
  *
  * ★ 版本号必须与 ApplicationType 严格配对，否则即使盐正确也会判验签失败：
  *   ApplicationType "1,1"（App）      → VersionCode "3.1.9"
- *   ApplicationType "1,5"（小程序）   → VersionCode "2.0.83"
+ *   ApplicationType "1,5"（小程序）   → 登录走 2.0.83，业务走 2.0.178
  *
  * 历史：3.1.9 官方包里的 aB3dF6hJ9kL2nP5rT8wY1eG4iM7oQ0v 确实已失效，
- * 且 acc/login 本身不校验 sign（详见 Signer.signQuery 注释）。
+ * 且 acc/login 本身不校验 sign（详见 Signer.login 注释）。
  */
 object ApiConfig {
     var baseUrl: String = ""
@@ -37,9 +37,12 @@ object ApiConfig {
     //   业务接口（mission-lst / acc-score / score-send）走 MINI_VERSION = "2.0.178"
     // 取值来自下游 dong-dong6/ilife798 v1.3.15（实测可用）。
     // 交叉搭配（比如业务接口发 2.0.83）会被服务端判「验签失败」。
-    const val VERSION_CODE_MINI: String = "2.0.83"
     const val MINI_LOGIN_VERSION: String = "2.0.83"
     const val MINI_VERSION: String = "2.0.178"
+
+    // 旧名保留为别名，避免外部引用失效
+    const val VERSION_CODE_MINI: String = MINI_LOGIN_VERSION
+
     val USER_AGENT: String = "${if (isIOS) "iOS" else "Android"}_ilife798_$VERSION_CODE"
 
     // 网络超时：连接 10s，单次请求 30s，读空闲 30s。

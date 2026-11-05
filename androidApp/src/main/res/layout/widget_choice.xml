@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_choice" android:layout_width="match_parent" android:layout_height="0dp"
+    android:layout_weight="1" android:gravity="center_vertical" android:paddingHorizontal="10dp"
+    android:layout_marginVertical="2dp" android:background="@drawable/widget_choice_background"
+    android:textColor="@color/widget_control_ink" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />

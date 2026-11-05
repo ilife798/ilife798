@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_card_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/widget_card_background" android:orientation="vertical" android:padding="14dp">
+    <LinearLayout android:id="@+id/widget_summary" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginEnd="12dp" android:orientation="vertical">
+            <TextView android:id="@+id/widget_account" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="3dp" android:ellipsize="end" android:maxLines="1" android:includeFontPadding="false"
+                android:text="@string/device_widget_label" android:textColor="@color/widget_secondary" android:textSize="10sp" />
+            <TextView android:id="@+id/widget_name" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:includeFontPadding="false" android:maxLines="2" android:ellipsize="end" android:fontFamily="sans-serif-medium"
+                android:text="@string/device_widget_choose" android:textSize="20sp" android:textColor="@color/widget_foreground" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp"
+                android:orientation="horizontal" android:gravity="top">
+                <TextView android:id="@+id/widget_status_dot" android:layout_width="12dp" android:layout_height="wrap_content"
+                    android:importantForAccessibility="no" android:includeFontPadding="false" android:paddingTop="3dp"
+                    android:text="●" android:textSize="7sp" android:textColor="@color/widget_accent" />
+                <TextView android:id="@+id/widget_status" android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:includeFontPadding="false" android:maxLines="2" android:ellipsize="end"
+                    android:text="@string/device_widget_not_configured" android:textSize="11sp" android:textColor="@color/widget_accent" />
+            </LinearLayout>
+        </LinearLayout>
+        <TextView android:id="@+id/widget_open" android:layout_width="44dp" android:layout_height="44dp"
+            android:background="@drawable/widget_action_background" android:drawableTop="@drawable/widget_power"
+            android:drawablePadding="3dp" android:gravity="center" android:includeFontPadding="false"
+            android:paddingTop="2dp" android:paddingBottom="2dp" android:paddingHorizontal="3dp"
+            android:maxLines="1" android:ellipsize="end" android:text="@string/device_widget_open"
+            android:textSize="10sp" android:textColor="@color/widget_control_ink" android:fontFamily="sans-serif-medium" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/widget_choices_panel" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:orientation="vertical" android:visibility="gone">
+        <TextView android:id="@+id/widget_choices_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:textColor="@color/widget_foreground" android:textSize="12sp" android:maxLines="1" android:ellipsize="end" />
+        <LinearLayout android:id="@+id/widget_choices" android:layout_width="match_parent" android:layout_height="0dp"
+            android:layout_weight="1" android:orientation="vertical" android:gravity="center_vertical" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="24dp" android:orientation="horizontal">
+        <TextView android:id="@+id/widget_choices_cancel" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent"
+            android:gravity="start|center_vertical" android:textColor="@color/widget_secondary" android:textSize="11sp" android:text="返回设备" />
+        <TextView android:id="@+id/widget_choices_next" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent"
+            android:gravity="end|center_vertical" android:textColor="@color/widget_accent" android:textSize="11sp" android:text="更多选项 ›" />
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="16dp" android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView android:id="@+id/widget_updated" android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:layout_marginEnd="8dp" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"
+            android:text="@string/device_widget_configure_hint" android:textSize="9sp" android:textColor="@color/widget_secondary" />
+        <TextView android:id="@+id/widget_position" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="1 / 1" android:includeFontPadding="false" android:textColor="@color/widget_secondary" android:textSize="10sp" />
+    </LinearLayout>
+    <ProgressBar android:id="@+id/widget_progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="2dp" android:indeterminate="true"
+        android:indeterminateTint="@color/widget_accent" android:visibility="gone" />
+</LinearLayout>

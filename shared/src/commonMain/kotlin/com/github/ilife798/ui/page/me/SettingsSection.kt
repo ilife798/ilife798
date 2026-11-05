@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
+import com.github.ilife798.AppRepository
 import com.github.ilife798.data.model.PaletteStyle
 import com.github.ilife798.data.model.ThemeMode
 import com.github.ilife798.data.viewmodel.AppViewModel
@@ -227,8 +228,8 @@ internal fun SettingsSection(
             )
             ArrowPreference(
                 title = "查看源代码",
-                summary = "在 GitHub 上查看源代码",
-                onClick = { uriHandler.openUri("https://github.com/ilife798/ilife798") },
+                summary = AppRepository.NAME,
+                onClick = { uriHandler.openUri(AppRepository.URL) },
             )
             ArrowPreference(
                 title = "开放源代码许可",

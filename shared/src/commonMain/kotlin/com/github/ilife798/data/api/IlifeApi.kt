@@ -185,13 +185,17 @@ class IlifeApi(
         phone: String,
         graphCode: String,
         captchaKey: String,
+        isAlipay: Boolean = false,
     ): String =
         try {
             val response =
                 client.apiPost("acc/login/code") {
+                    header("ApplicationType", if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE)
+                    header("VersionCode", if (isAlipay) ApiConfig.MINI_LOGIN_VERSION else ApiConfig.VERSION_CODE)
                     contentType(ContentType.Application.Json)
                     setBody(requestJson.encodeToString(SmsCodeRequest(phone, graphCode, captchaKey)))
                 }
+            calibrateAppTime(response)
             response.bodyAsText()
         } catch (e: Exception) {
             """{"code":-1,"msg":"${e.message}"}"""
@@ -215,11 +219,22 @@ class IlifeApi(
                 ),
             )
         val response =
-            client.apiPost("acc/login?sign=$sign") {
+            // 小程序通道走 openCode 版本的 body，App 通道发 authCode+un
+            client.apiPost(if (isAlipay) "acc/login" else "acc/login?sign=${Signer.login(phone, smsCode)}") {
                 contentType(ContentType.Application.Json)
-                setBody(requestJson.encodeToString(request))
+                setBody(
+                    if (isAlipay) {
+                        requestJson.encodeToString(LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid))
+                    } else {
+                        JsonObject(
+                            mapOf("authCode" to JsonPrimitive(smsCode), "un" to JsonPrimitive(phone)),
+                        ).toString()
+                    },
+                )
                 header("ApplicationType", appType)
+                header("VersionCode", if (isAlipay) ApiConfig.MINI_LOGIN_VERSION else ApiConfig.VERSION_CODE)
             }
+        calibrateAppTime(response)
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
         val code = body.int("code", -1)
         if (code != 0) return LoginResult(false, error = body.str("msg", "登录失败"))
@@ -269,6 +284,7 @@ class IlifeApi(
                 val response =
                     client.apiGet("acc/score/mission-lst") {
                         apiHeaders(token, APP_TYPE_POINTS)
+                        headers["VersionCode"] = ApiConfig.MINI_VERSION
                     }
                 val body = bodyJson(response, notifyExpiry = false, reportError = false)
                 val ok = body.intOrNull("code") == 0
@@ -414,12 +430,18 @@ class IlifeApi(
     }
 
     // 设备
-    suspend fun getMasterDevices(token: String): MasterResult {
+    suspend fun getMasterDevices(
+        token: String,
+        appType: String = APP_TYPE_DEVICE,
+    ): MasterResult {
         val response =
             client.apiGet("ui/app/master") {
-                apiHeaders(token, APP_TYPE_DEVICE)
+                apiHeaders(token, appType)
             }
         val body = bodyJson(response, reportError = false)
+        if (body.int("code", -1) != 0) {
+            throw IllegalStateException(body.str("msg", "常用设备加载失败"))
+        }
         val data = body.obj("data") ?: return MasterResult()
         val accountId = data.obj("account")?.str("id") ?: ""
         val favos = data.arr("favos") ?: return MasterResult(accountId)
@@ -434,6 +456,7 @@ class IlifeApi(
                     name = obj.str("name"),
                     geneStatus = geneStatus,
                     dtype = dtype,
+                    deviceStatus = obj.int("status", 1),
                 )
             }
         return MasterResult(accountId, devices)
@@ -659,8 +682,10 @@ class IlifeApi(
                 scoreHeaders(token, isApp)
             }
         val body = bodyJson(response)
+        // 积分汇总走独立的 acc/score/acc-score 接口，比从 mission-lst 里取更可靠。
+        // 这里容错：积分查询失败时任务列表仍可用（仅少了汇总数字），
+        // 但 executeMission 的到账核验会另行走 getPointsSummary 并严格校验。
         val data = body.obj("data") ?: return MissionListResult(emptyList())
-        // 积分汇总走独立的 acc/score/acc-score 接口，比从 mission-lst 里取更可靠
         val accScore =
             try {
                 getPointsBody(token, isApp)
@@ -676,14 +701,22 @@ class IlifeApi(
         val dailyAdId = dailyRsp?.str("adId") ?: ""
         val dailyScore = dailyRsp?.intOrNull("score") ?: 5
 
-        // 官方 n0.b 语义：limits 中值为 -1 表示今日已达上限，按任务上限计入；负数一律视为已完成
-        val limitsArray = accScore?.arr("limits") ?: emptyList()
+        // -1 表示今日已达上限；其余异常进度不能当成 0 次继续提交。
+        val limitsArray =
+            if (accScore["limits"] == null ||
+                accScore["limits"] == JsonNull
+            ) {
+                emptyList()
+            } else {
+                checkNotNull(accScore.arr("limits")) { "任务进度格式错误" }
+            }
         val dailyDoneMap = mutableMapOf<String, Int>()
         for (item in limitsArray) {
             val obj = item.jsonObject
             val refId = obj.str("refId")
-            val limit = obj.int("limit")
-            if (refId.isNotEmpty()) dailyDoneMap[refId] = limit
+            val limit = checkNotNull(obj.intOrNull("limit")) { "缺少任务完成次数" }
+            check(refId.isNotBlank() && limit >= -1) { "任务完成次数无效" }
+            dailyDoneMap[refId] = limit
         }
 
         val missions =
@@ -785,6 +818,7 @@ class IlifeApi(
         page: Int = 0,
         size: Int,
         src: Int? = null,
+        isApp: Boolean = true,
     ): ScoreListResult {
         val response =
             client.apiGet("acc/score/score-lst") {
@@ -792,7 +826,7 @@ class IlifeApi(
                 parameter("size", size.toString())
                 parameter("hasCount", "1")
                 if (src != null) parameter("src", src.toString())
-                apiHeaders(token, APP_TYPE_DEVICE)
+                apiHeaders(token, if (isApp) APP_TYPE_DEVICE else APP_TYPE_POINTS)
             }
         val body = bodyJson(response)
         val data = body.arr("data") ?: return ScoreListResult(emptyList(), 0)

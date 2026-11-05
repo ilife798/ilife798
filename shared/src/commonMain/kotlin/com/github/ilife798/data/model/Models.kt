@@ -30,6 +30,7 @@ enum class HomeDeviceType(
     val label: String,
     val deviceType: Int,
 ) {
+    All("全部", 0),
     Laundry("洗烘", 10),
     HairDrying("吹风", 20),
     Drinking("饮水", 8),
@@ -37,8 +38,10 @@ enum class HomeDeviceType(
     Other("其它", -1),
     ;
 
+    fun matches(dtype: Int): Boolean = this == All || fromDeviceType(dtype) == this
+
     companion object {
-        fun fromDeviceType(dtype: Int): HomeDeviceType? = entries.firstOrNull { it.deviceType == dtype } ?: if (dtype > 0) Other else null
+        fun fromDeviceType(dtype: Int): HomeDeviceType = entries.firstOrNull { it != All && it != Other && it.deviceType == dtype } ?: Other
     }
 }
 

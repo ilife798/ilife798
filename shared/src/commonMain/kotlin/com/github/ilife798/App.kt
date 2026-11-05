@@ -1,6 +1,7 @@
 package com.github.ilife798
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -17,6 +18,17 @@ fun App(weChatFallbackAppId: String = "") {
     remember(weChatFallbackAppId) { setWeChatFallbackAppId(weChatFallbackAppId) }
     val viewModel = viewModel { AppViewModel() }
     val state = viewModel.state
+    val widgetAccountKeys =
+        (state.accountList.map { it.account } + state.account)
+            .filter { it.hasAnyToken }
+            .map { DeviceWidgets.accountKey(it) }
+            .filter { it.isNotEmpty() }
+            .toSet()
+    val widgetEntries = viewModel.deviceWidgetEntries()
+    LaunchedEffect(widgetAccountKeys, widgetEntries) {
+        runCatching { DeviceWidgets.controller?.sync(widgetAccountKeys, widgetEntries) }
+            .onFailure { logDebug("ILife798", "syncDeviceWidgets: ${it.message}") }
+    }
     AppTheme(
         themeMode = state.themeMode,
         customColor = state.customColor,
