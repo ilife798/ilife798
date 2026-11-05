@@ -437,7 +437,15 @@ class TaskController(
         if (signResult.code == -98) {
             addTaskLog("每日签到: 请求频繁，等待60秒重试...")
             delay(60.seconds)
-            val retryResult = api.signIn(signToken, uid, weekDay, merged.dailyAdId, merged.dailyScore, signToken == earnings.account.appToken)
+            val retryResult =
+                api.signIn(
+                    signToken,
+                    uid,
+                    weekDay,
+                    merged.dailyAdId,
+                    merged.dailyScore,
+                    signToken == earnings.account.appToken,
+                )
             if (retryResult.success) {
                 addTaskLog("每日签到请求成功，正在核验到账")
                 return verifyPoints(earnings)
