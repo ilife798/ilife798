@@ -125,6 +125,7 @@ kotlin {
     sourceSets {
         androidMain.dependencies {
             implementation(libs.ktor.okhttp)
+            implementation(libs.ktorLogging)
             implementation(libs.androidx.activity.compose)
             implementation(libs.alipay.sdk)
             implementation(libs.wechat.sdk)

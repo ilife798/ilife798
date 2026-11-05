@@ -206,32 +206,31 @@ class IlifeApi(
         smsCode: String,
         isAlipay: Boolean,
     ): LoginResult {
-        val appType = if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE
-        val request = LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid)
-        // 3.1.9 起 acc/login 也校验 sign：对与请求体同源的参数表做签名后拼到 query 上
-        val sign =
-            Signer.signQuery(
-                mapOf(
-                    "openCode" to request.openCode,
-                    "authCode" to request.authCode,
-                    "un" to request.un,
-                    "cid" to request.cid,
-                ),
-            )
+        /*
+         * 2026-11-05 实测定稿（PC 直连 + 真实验证码多轮对照 + 官方抓包）：
+         * 登录 body 两个通道相同，都是裸 {"authCode","un"}——不带 cid/openCode
+         * （cid=MI1009 是广告渠道 ID，注入登录 body 会导致会话建立阶段被拒
+         *  「请升级最新版应用」；官方内部 cid 是 MainActivity 里的 drinkwaterapp123456789）。
+         *
+         * 区别在于通道头与签名盐，二者决定服务端会话类型（响应 al.stype）：
+         *   设备登录 isAlipay=false → AT 1,1 + VC 3.1.9 + sign(APP 盐)      → stype:1
+         *   积分登录 isAlipay=true  → AT 1,5 + VC 2.0.83 + sign(MINI 盐)    → stype:5
+         * stype:1 与 stype:5 会话的任务列表互补（前者：玩赚/逛一逛/看资讯/视频30/广告10，
+         * 后者：外卖红包/视频20/猜一猜），积分任务的完整列表需要两种 token 合并——
+         * 这就是 fetchMergedMissions 存在的原因。
+         * fork 旧实现的 bug：1,5 登录发了带 cid 的 body 且不带 sign → 一律「请升级最新版应用」。
+         */
+        val salt = if (isAlipay) ApiConfig.miniSalt else ApiConfig.salt
+        val sign = Signer.login(phone, smsCode, salt)
         val response =
-            // 小程序通道走 openCode 版本的 body，App 通道发 authCode+un
-            client.apiPost(if (isAlipay) "acc/login" else "acc/login?sign=${Signer.login(phone, smsCode)}") {
+            client.apiPost("acc/login?sign=$sign") {
                 contentType(ContentType.Application.Json)
                 setBody(
-                    if (isAlipay) {
-                        requestJson.encodeToString(LoginRequest(authCode = smsCode, un = phone, cid = ApiConfig.cid))
-                    } else {
-                        JsonObject(
-                            mapOf("authCode" to JsonPrimitive(smsCode), "un" to JsonPrimitive(phone)),
-                        ).toString()
-                    },
+                    JsonObject(
+                        mapOf("authCode" to JsonPrimitive(smsCode), "un" to JsonPrimitive(phone)),
+                    ).toString(),
                 )
-                header("ApplicationType", appType)
+                header("ApplicationType", if (isAlipay) APP_TYPE_POINTS else APP_TYPE_DEVICE)
                 header("VersionCode", if (isAlipay) ApiConfig.MINI_LOGIN_VERSION else ApiConfig.VERSION_CODE)
             }
         calibrateAppTime(response)

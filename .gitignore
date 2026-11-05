@@ -38,3 +38,6 @@ xcuserdata/
 .env
 
 AGENTS.md
+
+# 本地构建缓存与临时文件
+.tmp/

@@ -19,9 +19,10 @@ object Signer {
     fun login(
         phone: String,
         code: String,
+        salt: String = ApiConfig.salt,
     ): String {
-        require(ApiConfig.salt.isNotBlank()) { "SIGN_SALT 未配置" }
-        return md5("authCode=$code&un=$phone${ApiConfig.salt}")
+        require(salt.isNotBlank()) { "SIGN_SALT 未配置" }
+        return md5("authCode=$code&un=$phone$salt")
     }
 
     /*

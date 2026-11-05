@@ -181,6 +181,8 @@ fun TasksPage(
                     }
                 }
 
+                // 2026-11-05 定稿：两种登录创建不同会话（stype:1 设备会话 / stype:5 任务会话），
+                // 任务列表互补——积分登录确实能解锁任务侧任务（外卖红包/视频20/猜一猜），横幅保留。
                 if (state.account.appToken.isNotEmpty() && !state.account.pointsLoginDone && state.taskLogs.isEmpty()) {
                     Card(
                         modifier =

@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
             // 小程序通道（1,5）的独立盐，缺省空串；未注入时积分通道的 score-send 必然验签失败
             miniSalt = BuildConfig.MINI_SIGN_SALT,
         )
+        ApiConfig.debugLogging = BuildConfig.DEBUG
 
         handleIntent(intent)
 

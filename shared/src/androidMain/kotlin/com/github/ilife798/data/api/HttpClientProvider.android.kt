@@ -3,6 +3,9 @@ package com.github.ilife798.data.api
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.client.plugins.logging.Logger
+import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.header
@@ -36,6 +39,17 @@ internal fun createAndroidHttpClient(
             connectTimeoutMillis = ApiConfig.CONNECT_TIMEOUT_MS
             requestTimeoutMillis = ApiConfig.REQUEST_TIMEOUT_MS
             socketTimeoutMillis = ApiConfig.SOCKET_TIMEOUT_MS
+        }
+        if (ApiConfig.debugLogging) {
+            install(Logging) {
+                logger =
+                    object : Logger {
+                        override fun log(message: String) {
+                            android.util.Log.i("ILIFE798-API", message)
+                        }
+                    }
+                level = LogLevel.ALL
+            }
         }
         defaultRequest {
             contentType(ContentType.Application.Json)

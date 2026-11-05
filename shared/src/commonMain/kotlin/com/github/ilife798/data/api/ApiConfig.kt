@@ -30,6 +30,9 @@ object ApiConfig {
     // 小程序通道（ApplicationType "1,5"）的独立盐，与 App 通道不可混用。
     // 未注入时回落空串，此时小程序通道的 score-send 必然验签失败。
     var miniSignSalt: String = ""
+
+    // 调试开关：开启后 HttpClient 会把请求/响应全文打到 logcat（tag ILIFE798-API），仅 debug 包使用
+    var debugLogging: Boolean = false
     const val VERSION_CODE: String = "3.1.9"
 
     // 小程序通道有两个版本号，用途不同，不可混用：
