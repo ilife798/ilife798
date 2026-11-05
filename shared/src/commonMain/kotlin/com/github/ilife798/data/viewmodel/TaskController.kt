@@ -268,6 +268,9 @@ class TaskController(
             setState {
                 it.copy(
                     weekMask = merged.weekMask,
+                    // 任务完成态只由服务端数据推导，不做本地持久化：
+                    // 启动、切号、下拉、运行结束后都走这里，跨天自然恢复。
+                    taskCompleted = isAllTasksCompleted(merged.missions, merged.weekMask),
                     points =
                         it.points.copy(
                             available = merged.validScore ?: it.points.available,
@@ -289,6 +292,9 @@ class TaskController(
     ): Boolean {
         if (missions.isEmpty()) return false
         val regular = missions.filter { !it.isDailySignin && it.limit > 0 && it.score > 0 }
+        // 没有可执行任务（只有签到或全是 0 分任务）不能算「今日任务已完成」：
+        // all{} 对空集合恒真，会把根本没跑过的状态判成完成。
+        if (regular.isEmpty()) return false
         val allDone = regular.all { it.dailyCompleted >= it.limit }
         val weekDay = getDayOfWeek()
         val signInDone =
@@ -317,11 +323,10 @@ class TaskController(
             return
         }
         scope.launch {
-            // 拉取最新任务与完成状态，全部完成时不再运行
+            // 拉取最新任务与完成状态（reload 内部会按服务端数据刷新 taskCompleted），
+            // 全部完成时不再运行
             lastMissionsLoadTime = currentTimeMillis()
-            val merged = reloadMissionsAndReturn()
-            if (merged != null && isAllTasksCompleted(merged.missions, merged.weekMask)) {
-                setState { it.copy(taskCompleted = true) }
+            if (reloadMissionsAndReturn() != null && getState().taskCompleted) {
                 onToast("今日任务已完成")
                 return@launch
             }
@@ -413,7 +418,8 @@ class TaskController(
                     gained = verifyPoints(earnings)
 
                     if (isActive && isCurrentAccount()) {
-                        val latest = reloadMissionsAndReturn()
+                        // 重新拉取任务列表：完成态由 reloadMissionsAndReturn 统一按服务端数据推导
+                        reloadMissionsAndReturn()
                         val resultText =
                             if (earnings.queryFailed) {
                                 "任务请求结束，到账核验失败，已核验 $gained 分"
@@ -422,13 +428,6 @@ class TaskController(
                             }
                         addTaskLog(resultText)
                         onToast(resultText)
-                        setState {
-                            it.copy(
-                                taskCompleted =
-                                    !earnings.queryFailed && latest != null &&
-                                        isAllTasksCompleted(latest.missions, latest.weekMask),
-                            )
-                        }
                         onReloadScores()
                     }
                 } catch (_: CancellationException) {
@@ -587,17 +586,12 @@ class TaskController(
         scope.launch {
             try {
                 if (getLoading()) {
-                    val completed = isAllTasksCompleted(missions, getState().weekMask)
-                    setState { it.copy(taskCompleted = completed) }
+                    setState { it.copy(taskCompleted = isAllTasksCompleted(missions, getState().weekMask)) }
                 } else {
                     lastMissionsLoadTime = currentTimeMillis()
-                    val merged = reloadMissionsAndReturn() ?: return@launch
-                    setState {
-                        it.copy(
-                            taskCompleted = isAllTasksCompleted(merged.missions, merged.weekMask),
-                            taskLogs = emptyList(),
-                        )
-                    }
+                    // reload 内部按服务端数据刷新 taskCompleted
+                    reloadMissionsAndReturn() ?: return@launch
+                    setState { it.copy(taskLogs = emptyList()) }
                 }
             } finally {
                 tasksRefreshing = false

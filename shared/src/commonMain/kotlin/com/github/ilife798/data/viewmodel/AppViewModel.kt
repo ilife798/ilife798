@@ -1431,6 +1431,9 @@ class AppViewModel : ViewModel() {
 
     fun refreshTasks() = task.refresh()
 
+    // 回到前台时按服务端数据重新推导完成态（跨零点后本地状态不再可靠）
+    fun reloadTaskState() = task.loadMissions()
+
     // 设置
     fun setDynamicColor(enabled: Boolean) {
         state = state.copy(dynamicColor = enabled)

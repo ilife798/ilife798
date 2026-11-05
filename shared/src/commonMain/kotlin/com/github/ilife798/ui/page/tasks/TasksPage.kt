@@ -66,16 +66,14 @@ fun TasksPage(
     // 已忽略电池优化（设为「无限制」）后不再展示提示卡片，从设置返回后短暂重试
     var batteryUnrestricted by remember { mutableStateOf(isIgnoringBatteryOptimizations()) }
     LaunchedEffect(AppLifecycle.resumeCount) {
+        // 回到前台时若当前显示「今日任务已完成」，重新拉一次服务端状态：
+        // App 挂在前台跨过零点时服务端已重置任务，本地完成态必须跟着恢复（issue #7）。
+        // 未显示已完成时不额外请求。
+        if (state.taskCompleted) viewModel.reloadTaskState()
         repeat(6) { attempt ->
             batteryUnrestricted = isIgnoringBatteryOptimizations()
             if (batteryUnrestricted || attempt == 5) return@LaunchedEffect
             delay(400.milliseconds)
-        }
-    }
-
-    LaunchedEffect(missions) {
-        if (missions.isNotEmpty() && !viewModel.isLoading && !state.taskCompleted && viewModel.allTasksCompleted) {
-            viewModel.setTaskCompleted()
         }
     }
 
