@@ -702,14 +702,8 @@ class IlifeApi(
         val dailyScore = dailyRsp?.intOrNull("score") ?: 5
 
         // -1 表示今日已达上限；其余异常进度不能当成 0 次继续提交。
-        val limitsArray =
-            if (accScore["limits"] == null ||
-                accScore["limits"] == JsonNull
-            ) {
-                emptyList()
-            } else {
-                checkNotNull(accScore.arr("limits")) { "任务进度格式错误" }
-            }
+        // accScore 可为 null（积分查询失败容错），此时视为无进度数据。
+        val limitsArray = accScore?.arr("limits") ?: emptyList()
         val dailyDoneMap = mutableMapOf<String, Int>()
         for (item in limitsArray) {
             val obj = item.jsonObject
