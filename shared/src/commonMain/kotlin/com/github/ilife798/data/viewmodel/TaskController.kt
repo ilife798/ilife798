@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.RunNotifications
+import com.github.ilife798.data.api.CODE_RATE_LIMITED
 import com.github.ilife798.data.api.IlifeApi
+import com.github.ilife798.data.api.PointsQueryException
 import com.github.ilife798.data.model.Account
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.MissionInfo
@@ -77,19 +79,31 @@ class TaskController(
         var queryFailed = false
     }
 
-    // 按通道优先级查积分汇总：积分 token 优先，缺失时回退 appToken
+    /*
+     * 按通道优先级查积分汇总：积分 token 优先，缺失时回退 appToken。
+     *
+     * 服务端对 acc-score 有频控（-98）：刚跑完一轮任务、或刚在另一账号上高频查询后
+     * 切号立即运行，很容易命中。此前一次限流就让整轮任务无法开始（issue #5），
+     * 这里对 -98 做短退避重试；其他业务码（-99 会话过期等）不重试，直接换下一个 token。
+     */
     private suspend fun pointsFor(account: Account): PointsInfo {
         val tokens = listOf(account.token to false, account.appToken to true).filter { it.first.isNotEmpty() }
         var failure: Exception? = null
-        for ((token, app) in tokens) {
-            try {
-                val result = api.getPointsSummary(token, app)
-                check(result.total != null) { "缺少累计积分，无法核验到账" }
-                return result
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failure = e
+        tokenLoop@ for ((token, app) in tokens) {
+            for (attempt in 0 until POINTS_QUERY_ATTEMPTS) {
+                try {
+                    val result = api.getPointsSummary(token, app)
+                    check(result.total != null) { "缺少累计积分，无法核验到账" }
+                    return result
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failure = e
+                    val retryable = (e as? PointsQueryException)?.code == CODE_RATE_LIMITED
+                    if (!retryable || attempt == POINTS_QUERY_ATTEMPTS - 1) continue@tokenLoop
+                    addTaskLog("积分查询被限流，${POINTS_QUERY_RETRY_DELAY_MS / 1000} 秒后重试…")
+                    delay(POINTS_QUERY_RETRY_DELAY_MS)
+                }
             }
         }
         throw failure ?: IllegalStateException("没有可用的积分查询登录")
@@ -108,7 +122,15 @@ class TaskController(
             ) {
                 throw CancellationException("账号已切换")
             }
-            val before = checkNotNull(earnings.before) { "缺少本轮初始积分" }
+            val before = earnings.before
+            if (before == null) {
+                // 本轮开始时未获取到积分基准（issue #5 降级路径）：无法计算增量，
+                // 但仍展示查询到的当前累计，保留 queryFailed 让结尾提示如实反映。
+                earnings.queryFailed = true
+                setState { it.copy(points = points) }
+                addTaskLog("本轮开始时没有积分基准，无法核验增量（当前累计 ${points.total ?: "未知"} 分）")
+                return earnings.verified
+            }
             val delta = checkNotNull(points.total) - before
             check(delta >= earnings.verified) { "累计积分减少，无法确认本轮到账" }
             earnings.verified = delta
@@ -348,19 +370,41 @@ class TaskController(
                     }
                     val missionList = merged.missions
                     missions = missionList
-                    val initialPoints = pointsFor(account)
+                    /*
+                     * issue #5：切换/登录第二个账号后立即运行任务时，acc-score 可能被服务端
+                     * 频控或风控拒绝（A 账号刚高频查询过）。此前直接中止整轮任务，用户什么都跑不了。
+                     * 现在降级：查询失败仍继续执行任务，只是本轮不做到账核验（before = null），
+                     * 具体的服务端 code/msg 已由 PointsQueryException 带入运行日志。
+                     */
+                    val initialPoints =
+                        try {
+                            pointsFor(account)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            addTaskLog("积分查询失败（${e.message}），继续执行任务，本轮不做到账核验")
+                            null
+                        }
                     if (!isCurrentAccount()) throw CancellationException("账号已切换")
-                    val earnings = Earnings(account, initialPoints.total)
+                    val earnings = Earnings(account, initialPoints?.total)
                     runEarnings = earnings
-                    setState { it.copy(points = initialPoints) }
+                    if (initialPoints != null) {
+                        setState { it.copy(points = initialPoints) }
+                    }
                     var gained = 0
 
                     gained = runDailySignin(merged, uid, earnings)
 
+                    val accountTokens = setOf(account.token, account.appToken).filter { it.isNotEmpty() }.toSet()
                     val validMissions =
                         missionList.filter {
                             !it.isDailySignin && it.limit > 0 && it.score > 0 &&
                                 it.sourceToken.isNotEmpty() &&
+                                // 任务必须源自当前账号持有的会话：切换账号后若内存里
+                                // 残留了上一账号的任务（isCurrentAccount 比对时序问题等），
+                                // 其 sourceToken 不在当前 token 集合内，这里直接剔除，
+                                // 避免用错误 token 签名执行（issue #5 内存状态类根因兜底）。
+                                it.sourceToken in accountTokens &&
                                 // 这类任务涉及金融营销，直接跳过（与下游一致的安全防护）
                                 listOf("免费权益", "借贷", "贷款").none { name -> name in it.name }
                         }
@@ -564,5 +608,11 @@ class TaskController(
     private fun addTaskLog(message: String) {
         val time = currentTimeFormatted("HH:mm:ss")
         setState { it.copy(taskLogs = it.taskLogs + "[$time] $message") }
+    }
+
+    private companion object {
+        // 积分汇总查询：-98 频控时的重试次数与退避间隔（issue #5）
+        const val POINTS_QUERY_ATTEMPTS = 2
+        const val POINTS_QUERY_RETRY_DELAY_MS = 5_000L
     }
 }

@@ -45,11 +45,25 @@ internal const val CODE_UNKNOWN = Int.MIN_VALUE
 // 绑卡成功
 internal const val CODE_OK = 0
 
+// 服务端频控：请求过于频繁，可退避重试
+internal const val CODE_RATE_LIMITED = -98
+
 // ic/bind 专用：该卡需要「绑卡密钥」，客户端应提示补填后重提
 internal const val CODE_CARD_KEY_REQUIRED = -15
 
 // 请求携带的 token，用于会话失效回调归属判断
 private val requestAuthTokenKey = AttributeKey<String>("ilife798.request.auth.token")
+
+/**
+ * acc/score/acc-score 查询失败。
+ *
+ * code 为服务端业务码（-98 频控、-99 会话过期等），null 表示响应结构异常。
+ * 调用方可据此区分「可稍后重试」与「需要重新登录」。
+ */
+class PointsQueryException(
+    val code: Int?,
+    message: String,
+) : IllegalStateException(message)
 
 class IlifeApi(
     private val client: HttpClient = createHttpClient(),
@@ -657,8 +671,14 @@ class IlifeApi(
     ): JsonObject {
         val response = client.apiGet("acc/score/acc-score") { scoreHeaders(token, isApp) }
         val body = bodyJson(response, reportError = false)
-        if (body.intOrNull("code") != 0) throw IllegalStateException("积分查询失败")
-        return body.obj("data") ?: throw IllegalStateException("积分查询响应不完整")
+        val code = body.intOrNull("code")
+        if (code != 0) {
+            // 带上服务端真实 code/msg：issue #5 的「积分查询失败」此前吞掉了
+            // 频控（-98）/会话过期（-99）等关键信息，无法定位切换账号后的失败原因。
+            val msg = body.strOrNull("msg") ?: "未知错误"
+            throw PointsQueryException(code, "积分查询失败（code=$code：$msg）")
+        }
+        return body.obj("data") ?: throw PointsQueryException(null, "积分查询响应不完整")
     }
 
     /*
