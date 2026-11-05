@@ -6,7 +6,11 @@ import kotlin.test.assertEquals
 
 // 请求体默认值与 JSON 契约（对齐 IlifeApi.requestJson 的 encodeDefaults = true + explicitNulls = false）
 class ApiRequestsTest {
-    private val json = Json { encodeDefaults = true; explicitNulls = false }
+    private val json =
+        Json {
+            encodeDefaults = true
+            explicitNulls = false
+        }
 
     @Test
     fun missionExecDefaultType() {

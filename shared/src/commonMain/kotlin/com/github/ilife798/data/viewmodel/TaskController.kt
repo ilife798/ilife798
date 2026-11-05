@@ -380,8 +380,9 @@ class TaskController(
                         onToast(resultText)
                         setState {
                             it.copy(
-                                taskCompleted = !earnings.queryFailed && latest != null &&
-                                    isAllTasksCompleted(latest.missions, latest.weekMask),
+                                taskCompleted =
+                                    !earnings.queryFailed && latest != null &&
+                                        isAllTasksCompleted(latest.missions, latest.weekMask),
                             )
                         }
                         onReloadScores()
