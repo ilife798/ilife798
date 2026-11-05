@@ -4,14 +4,24 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-// 请求体默认值与 JSON 契约（对齐 IlifeApi.requestJson 的 encodeDefaults = true）
+// 请求体默认值与 JSON 契约（对齐 IlifeApi.requestJson 的 encodeDefaults = true + explicitNulls = false）
 class ApiRequestsTest {
-    private val json = Json { encodeDefaults = true }
+    private val json = Json { encodeDefaults = true; explicitNulls = false }
 
     @Test
     fun missionExecDefaultType() {
         val request = MissionExecRequest(adId = "ad1")
         assertEquals(101, request.type)
+        assertEquals(
+            """{"adId":"ad1","type":101}""",
+            json.encodeToString(MissionExecRequest.serializer(), request),
+        )
+    }
+
+    // 小程序通道不加 addScore/addScoreType，且 null 字段不进请求体（explicitNulls = false）
+    @Test
+    fun missionExecNonAppOmitsAddFields() {
+        val request = MissionExecRequest.forChannel("ad1", 30, isApp = false)
         assertEquals(
             """{"adId":"ad1","type":101}""",
             json.encodeToString(MissionExecRequest.serializer(), request),

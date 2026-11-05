@@ -3,6 +3,7 @@ package com.github.ilife798.data.api
 import com.github.ilife798.util.md5
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -102,14 +103,16 @@ class SignerTest {
         assertEquals(expected, Signer.login(phone = "13800000000", code = "1234"))
     }
 
-    // 小程序通道未注入盐时同样是空串签名，不得静默回落到 App 通道的盐
+    // 小程序通道未注入盐时必须 fail-fast（采信下游的 require 校验），
+    // 不得静默回落到空盐或 App 通道的盐
     @Test
     fun miniChannelDoesNotBorrowAppSalt() {
         ApiConfig.init("https://example.com", salt, "cid")
         assertEquals("", ApiConfig.miniSalt)
-        val base = 1790266560000L
-        val bucket = 30 * (base / 30000)
-        val expected = md5("ad-1" + bucket + "abcdefgh" + "12345678")
-        assertEquals(expected, Signer.task("ad-1", "token-abcdefgh", "uid-12345678", isApp = false, now = base))
+        val exception =
+            assertFailsWith<IllegalArgumentException> {
+                Signer.task("ad-1", "token-abcdefgh", "uid-12345678", isApp = false)
+            }
+        assertEquals("MINI_SIGN_SALT 未配置", exception.message)
     }
 }

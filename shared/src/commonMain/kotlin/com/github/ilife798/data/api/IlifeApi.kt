@@ -61,7 +61,7 @@ class IlifeApi(
         }
 
     // 请求体序列化：保留默认值字段，保证与服务端约定一致
-    private val requestJson = Json { encodeDefaults = true }
+    private val requestJson = Json { encodeDefaults = true; explicitNulls = false }
 
     // 统一拼接 baseUrl 的请求入口；两侧斜杠归一化，兼容 baseUrl/path 带不带 "/"
     private fun apiUrl(path: String): String = ApiConfig.baseUrl.trimEnd('/') + "/" + path.trimStart('/')
