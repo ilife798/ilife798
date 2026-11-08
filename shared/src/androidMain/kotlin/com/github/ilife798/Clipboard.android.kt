@@ -17,7 +17,12 @@ actual fun readTextFromClipboard(): String? =
     try {
         val manager = ApplicationContext.instance.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = manager.primaryClip
-        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ApplicationContext.instance)?.toString()
+        val text =
+            clip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(ApplicationContext.instance)
+                ?.toString()
         text?.takeIf { it.isNotBlank() }
     } catch (_: Exception) {
         null

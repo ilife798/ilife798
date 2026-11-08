@@ -1114,6 +1114,12 @@ class AppViewModel : ViewModel() {
 
     fun loadAccountAssets(index: Int) = device.loadAccountAssets(index)
 
+    // 积分任务页进入/刷新时调用：把所有账号的积分各拉一次，让账号列表显示真实积分
+    fun refreshAllAccountAssets() = device.refreshAllAccountAssets()
+
+    // 强制重拉单个账号的余额与积分；批量执行每跑完一个账号调用一次
+    fun refreshAccountAssets(index: Int) = device.refreshAccountAssets(index)
+
     fun loadAccountInfo(): Job? {
         val token = currentToken()
         if (token.isEmpty()) return null

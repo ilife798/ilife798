@@ -142,8 +142,8 @@ class DeviceController(
             val state = getState()
             val active = state.wallets.firstOrNull { it.id == state.activeWalletId } ?: state.wallets.firstOrNull()
             val balance = active?.total ?: cached?.balance
-            val loadedPoints = state.points.available ?: 0
-            val points = loadedPoints.takeIf { it > 0 } ?: cached?.points
+            // 积分 0 是有效值（新账号/积分用完），只有 null 才算未加载
+            val points = state.points.available ?: cached?.points
             return AccountAssets(balance = balance, points = points, loaded = cached?.loaded == true)
         }
         return cached ?: AccountAssets()
@@ -155,10 +155,26 @@ class DeviceController(
         refreshAccountAssets(index)
     }
 
+    // 并发刷新所有账号的资产快照，供积分任务页的账号列表展示。
+    // 跳过当前账号：它已由 loadMissions/全局状态维护，重复请求只会和它抢同一账号的频控额度。
+    fun refreshAllAccountAssets() {
+        val current = getState().currentAccountIndex
+        getState()
+            .accountList.indices
+            .filter { it != current }
+            .forEach { refreshAccountAssets(it) }
+    }
+
+    // 正在进行中的刷新，按账号下标去重：同一账号并发请求会互相挤占 -98 额度，且结果互相覆盖。
+    // 与 accountAssets 一样是 Compose 快照表，只在主线程读写，无需额外加锁。
+    private val refreshingAssets = mutableStateMapOf<Int, Boolean>()
+
     // 无视是否为当前账号，强制拉一次余额与积分。
     // 当前账号的结果只写内存缓存，不回写全局状态，避免与正常加载流程互相覆盖。
     fun refreshAccountAssets(index: Int) {
         val auth = deviceAuthOf(index) ?: return
+        if (refreshingAssets.containsKey(index)) return
+        refreshingAssets[index] = true
         scope.launch {
             try {
                 val wallet = api.getWalletOwner(auth.token)
@@ -181,6 +197,8 @@ class DeviceController(
                 throw e
             } catch (e: Exception) {
                 onLogError("refreshAccountAssets", e)
+            } finally {
+                refreshingAssets.remove(index)
             }
         }
     }
