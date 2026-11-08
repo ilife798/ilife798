@@ -6,7 +6,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths-ignore: ['iosApp/**', '**/*.md']
+    # workflow 文件本身的改动不需要跑完整构建；iosApp 只影响 iOS 产物
+    paths-ignore:
+      - 'iosApp/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '**/*.md'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -19,6 +24,8 @@ permissions:
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # 不取消进行中的运行：发版（tag push）被打断会留下不完整的 release。
+  # 可重复触发的场景（PR 反复提交）交由下面的 pre-release job 用 cancel-in-progress 处理。
   cancel-in-progress: false
 
 env:
@@ -29,56 +36,30 @@ jobs:
     name: Validate Android build
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
     env:
       API_GATEWAY: ${{ secrets.API_GATEWAY }}
       SIGN_SALT: ${{ secrets.SIGN_SALT }}
       MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+      - name: Set up build environment
+        id: setup
+        uses: ./.github/actions/setup-build
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        with:
-          packages: 'platform-tools'
-      - name: Install Android platform and build tools
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+          api-gateway: ${{ secrets.API_GATEWAY }}
+          sign-salt: ${{ secrets.SIGN_SALT }}
+          mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
+          api-cid: ${{ secrets.API_CID }}
+          secrets-mode: warn
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Read release version
-        id: version
+      # tag 构建必须与包内版本号一致，否则发布出去的包版本对不上
+      - name: Verify tag matches versionName
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          version="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' "$APP_MODULE/build.gradle.kts" | head -n 1)"
-          test -n "$version"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then test "$GITHUB_REF_NAME" = "v$version"; fi
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-          # 缺密钥时构建仍然成功，但积分/签到等需要签名的接口必然验签失败（服务端返回 code=-1 请升级最新版APP）。
-          # 这里显式告警，避免再次产出「能装但功能不可用」的包。
-          # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
-            grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但需签名的接口会验签失败"
-          done
+          test "$GITHUB_REF_NAME" = "${{ steps.setup.outputs.app-tag }}" || {
+            echo "::error::tag $GITHUB_REF_NAME 与 versionName ${{ steps.setup.outputs.version-name }} 不一致"
+            exit 1
+          }
 
       - name: Check formatting, tests and lint
         run: ./gradlew spotlessCheck :shared:testAndroidHostTest :androidApp:lintDebug --no-daemon --stacktrace
@@ -106,45 +87,17 @@ jobs:
       SIGN_SALT: ${{ secrets.SIGN_SALT }}
       MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
-      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+      - name: Set up build environment
+        id: setup
+        uses: ./.github/actions/setup-build
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        with:
-          packages: 'platform-tools'
-      - name: Install Android platform and build tools
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
-      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
-      - run: chmod +x ./gradlew
-      - name: Verify upstream configuration
-        run: |
-      - name: Verify upstream configuration
-        run: |
-          version_name="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' "$APP_MODULE/build.gradle.kts" | head -n 1)"
-          test "$GITHUB_REF_NAME" = "v$version_name"
-          test -n "$API_GATEWAY" || { echo '::error::API_GATEWAY is not configured'; exit 1; }
-          test -n "$SIGN_SALT" || { echo '::error::SIGN_SALT is not configured'; exit 1; }
-          test -n "$MINI_SIGN_SALT" || { echo '::error::MINI_SIGN_SALT is not configured'; exit 1; }
-          test -n "$API_CID" || { echo '::error::API_CID is not configured'; exit 1; }
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID; do
-            grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但需签名的接口会验签失败"
-          done
+          api-gateway: ${{ secrets.API_GATEWAY }}
+          sign-salt: ${{ secrets.SIGN_SALT }}
+          mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
+          api-cid: ${{ secrets.API_CID }}
+          secrets-mode: fail
+          persist-credentials: 'false'
 
       - name: Configure release signing
         env:
@@ -169,47 +122,131 @@ jobs:
                     'signing.keyAlias': os.environ['ANDROID_KEY_ALIAS'], 'signing.keyPassword': os.environ['ANDROID_KEY_PASSWORD']}
           Path('local.properties').write_text(''.join(f'{k}={escape(v)}\n' for k, v in values.items()), encoding='ascii')
           PY
+
       - name: Build signed release APKs
         run: ./gradlew :androidApp:assembleRelease --no-daemon
+
       - name: Verify signatures and generate checksums
         run: |
-          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-          for apk in "$APP_MODULE"/build/outputs/apk/release/*.apk; do "$apksigner" verify --verbose --print-certs "$apk"; done
-          (cd "$APP_MODULE/build/outputs/apk/release" && sha256sum *.apk > SHA256SUMS.txt)
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+          set -euo pipefail
+          # build-tools 版本由 setup-build 解析，不再硬编码（原写死 36.0.0）
+          apksigner="$ANDROID_HOME/build-tools/${{ steps.setup.outputs.build-tools }}/apksigner"
+          test -x "$apksigner" || { echo "::error::找不到 apksigner: $apksigner"; exit 1; }
+          for apk in "${APK_RELEASE_DIR}"/*.apk; do
+            "$apksigner" verify --verbose --print-certs "$apk"
+          done
+          (cd "$APK_RELEASE_DIR" && sha256sum ./*.apk > SHA256SUMS.txt)
+
+      - name: Upload R8 mapping
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ilife798-${{ needs.validate.outputs.tag }}-r8-mapping
+          name: ilife798-${{ steps.setup.outputs.app-tag }}-r8-mapping
           path: ${{ env.APP_MODULE }}/build/outputs/mapping/release/mapping.txt
           if-no-files-found: error
+
+      # release notes 改由 GitHub 按 PR/commit 历史自动生成。
+      # 原先写死在 heredoc 里的文案描述的是历史功能，与当次构建无关，每次发版都一样。
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.setup.outputs.app-tag }}
         run: |
-          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
-          ## 新增与修复
-          - 同步新版设备登录、小程序积分登录及双渠道积分签名协议。
-          - 积分任务按累计积分变化核验实际到账，查询失败时保留已核验结果，不按标称分数虚增。
-          - 修复桌面设备启动时误提示选择模式或通道、漏读已保存参数的问题。
-          - 唯一选项自动处理；多个模式或通道可直接在小组件内选择并记住，无需跳转 App。
-          - 修复滑动容器将多个选项误当首项处理的问题，准确传递用户选择；支持翻页、取消和防重复启动。
-          - 保留横向 4 列、2 行及上下滑动切换设备；启动中与实际运行中分开显示。
-
-          ## 安装说明
-          - 普通安卓手机优先下载 arm64-v8a APK；旧手机可选 armeabi-v7a，模拟器使用 x86_64。
-          - 本 fork 使用独立且固定的签名，与原作者 APK 签名不同，不能直接覆盖原作者版本。首次切换前请先备份原应用本地数据；后续本 fork 版本沿用同一签名。
-          - 小组件电源按钮会直接发起启动，优先钱袋支付，失败后按状态校验尝试支付宝免密；积分抵扣使用当前设备保存的选择。
-          - 多设备切换支持上下滑动，到首尾停止；需要模式或通道时直接在组件内选择，之后可一键复用。
-          - 小组件展示最近查询或操作的状态快照，非持续后台实时轮询。
-          - SHA256SUMS.txt 可用于检查下载文件完整性。
-          NOTES
-          assets=("$APP_MODULE"/build/outputs/apk/release/*.apk "$APP_MODULE/build/outputs/apk/release/SHA256SUMS.txt")
+          set -euo pipefail
+          assets=("${APK_RELEASE_DIR}"/*.apk "${APK_RELEASE_DIR}/SHA256SUMS.txt")
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            # iOS job 可能已先创建了 release，这里只补传 Android 产物
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" "${assets[@]}" --target "$GITHUB_SHA" --draft --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --target "$GITHUB_SHA" --title "$RELEASE_TAG" --generate-notes
           fi
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+
       - name: Remove signing files
         if: always()
         run: rm -f local.properties "$RUNNER_TEMP/ilife798-release.jks"
+
+  # 原先独立的 prerelease.yml。合并进来后可复用同一套 setup，
+  # 也不必再维护第二份 secrets 生成逻辑。
+  # 连续提交的重复构建由 workflow 级 concurrency 串行化，无需在此再设一套。
+  pre-release:
+    name: Pre-release (latest commit)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      API_GATEWAY: ${{ secrets.API_GATEWAY }}
+      SIGN_SALT: ${{ secrets.SIGN_SALT }}
+      MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
+      API_CID: ${{ secrets.API_CID }}
+    steps:
+      - name: Set up build environment
+        id: setup
+        uses: ./.github/actions/setup-build
+        with:
+          api-gateway: ${{ secrets.API_GATEWAY }}
+          sign-salt: ${{ secrets.SIGN_SALT }}
+          mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
+          api-cid: ${{ secrets.API_CID }}
+          secrets-mode: warn
+          persist-credentials: 'false'
+
+      # 有签名密钥就出签名包，否则退回 debug 包（保证预发布始终可用）
+      - name: Configure release signing (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/prerelease.keystore"
+            {
+              printf 'signing.storeFile=%s\n' "$RUNNER_TEMP/prerelease.keystore"
+              printf 'signing.storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+              printf 'signing.keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+              printf 'signing.keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+            } > local.properties
+            echo "BUILD_TASK=assembleRelease" >> "$GITHUB_ENV"
+            echo "APK_DIR=$APK_RELEASE_DIR" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_TASK=assembleDebug" >> "$GITHUB_ENV"
+            echo "APK_DIR=$APK_DEBUG_DIR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APKs
+        run: ./gradlew "$BUILD_TASK" --no-daemon
+
+      - name: Release notes from commit message
+        run: |
+          {
+            echo "$(git rev-parse --short HEAD)"
+            echo ""
+            git log -1 --pretty=%B
+          } > "$RUNNER_TEMP/prerelease-notes.md"
+          cat "$RUNNER_TEMP/prerelease-notes.md"
+
+      - name: Publish pre-release (rolling tag prelatest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="prelatest"
+          TITLE="Pre-release v${{ steps.setup.outputs.version-name }} · $SHA"
+          mapfile -t assets < <(find "$APK_DIR" -name '*.apk' | sort)
+          test ${#assets[@]} -gt 0 || { echo '::error::没有找到 APK'; exit 1; }
+          # 滚动更新：先删旧 release 与其 tag，再重建
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" "${assets[@]}" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file "$RUNNER_TEMP/prerelease-notes.md" \
+            --prerelease
+
+      - name: Remove signing files
+        if: always()
+        run: rm -f local.properties "$RUNNER_TEMP/prerelease.keystore"

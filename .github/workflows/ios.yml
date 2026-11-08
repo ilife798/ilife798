@@ -5,11 +5,12 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-    tags:
-      - 'v*'
+    tags: ['v*']
+    # 与 android.yml 对称：只改 Android 侧或 workflow 本身时不必跑 macOS 构建
     paths-ignore:
       - 'androidApp/**'
       - '.github/workflows/**'
+      - '.github/actions/**'
       - '**/*.md'
   workflow_dispatch:
 
@@ -18,7 +19,9 @@ permissions:
 
 concurrency:
   group: ios-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # 与 android.yml 保持一致：不取消进行中的运行。
+  # 此前这里是 true，同 ref 的新提交会中断正在跑的 iOS release，导致发布不完整。
+  cancel-in-progress: false
 
 env:
   APP_MODULE: androidApp
@@ -27,65 +30,22 @@ jobs:
   validate:
     name: Validate iOS build
     # Fork 默认只自动构建 Android；iOS 仍可手动运行。
+    # tag 构建交给下面的 release job，避免同一 tag 编译两次。
     if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.repository == 'ilife798/ilife798' || github.event_name == 'workflow_dispatch') }}
     runs-on: macos-26
     timeout-minutes: 40
-
     steps:
-      - uses: actions/checkout@v7
+      - name: Set up build environment
+        uses: ./.github/actions/setup-build
         with:
-          persist-credentials: false
-
-      - name: Cache Kotlin/Native toolchain
-        uses: actions/cache@v6
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: |
-            konan-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
-
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-37.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
-          IOS_SIGN_SALT: ${{ secrets.IOS_SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
-          printf 'IOS_SIGN_SALT=%s\n' "$IOS_SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-
-      - name: Warn on missing secrets
-        run: |
-          # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
-          # IOS_SIGN_SALT 是 iOS 平台的专属盐（服务端按 UA 选盐），缺失会回退 SIGN_SALT，
-          # 表现为 iOS 登录/签到「验签失败」。
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
-            grep -q "^$f=..*$" secrets.properties || echo "::warning::secrets.$f 未配置——构建可用，但产出的 IPA 访问后端会失败"
-          done
+          api-gateway: ${{ secrets.API_GATEWAY }}
+          sign-salt: ${{ secrets.SIGN_SALT }}
+          mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
+          ios-sign-salt: ${{ secrets.IOS_SIGN_SALT }}
+          api-cid: ${{ secrets.API_CID }}
+          secrets-mode: warn
+          require-ios-salt: 'true'
+          cache-konan: 'true'
 
       - name: Compile iOS targets
         run: ./gradlew :shared:compileKotlinIosArm64 :shared:compileKotlinIosSimulatorArm64 --stacktrace
@@ -94,7 +54,7 @@ jobs:
         run: ./iosApp/scripts/build-unsigned-ipa.sh
 
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ilife798-unsigned-ios-ipa
           path: iosApp/build/dist/*.ipa
@@ -107,90 +67,67 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: write
-
     steps:
-      - uses: actions/checkout@v7
+      - name: Set up build environment
+        id: setup
+        uses: ./.github/actions/setup-build
         with:
-          persist-credentials: false
+          api-gateway: ${{ secrets.API_GATEWAY }}
+          sign-salt: ${{ secrets.SIGN_SALT }}
+          mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
+          ios-sign-salt: ${{ secrets.IOS_SIGN_SALT }}
+          api-cid: ${{ secrets.API_CID }}
+          secrets-mode: fail
+          require-ios-salt: 'true'
+          cache-konan: 'true'
+          persist-credentials: 'false'
 
-      - name: Cache Kotlin/Native toolchain
-        uses: actions/cache@v6
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: |
-            konan-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
-
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-37.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Verify release tag matches app version
+      # 版本号有两处来源，且发版前必须同时改好：
+      #   androidApp/build.gradle.kts 的 versionName → Android 包版本
+      #   iosApp/Configuration/Config.xcconfig 的 MARKETING_VERSION → iOS 包版本
+      # 此前拆成两个 step 分别校验，任一失败都要重跑整条流水线，合并为一次检查。
+      - name: Verify release tag matches app versions
         run: |
-          version_name="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' "$APP_MODULE/build.gradle.kts" | head -n 1)"
-          test "$GITHUB_REF_NAME" = "v$version_name"
-
-      - name: Verify release tag matches iOS version
-        run: |
-          marketing="$(sed -n 's/^MARKETING_VERSION = //p' iosApp/Configuration/Config.xcconfig | tr -d '[:space:]')"
-          test "$GITHUB_REF_NAME" = "v$marketing"
-
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
-          IOS_SIGN_SALT: ${{ secrets.IOS_SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
-          printf 'IOS_SIGN_SALT=%s\n' "$IOS_SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
-
-      - name: Fail on missing release secrets
-        run: |
-          # SIGN_SALT 管 App 通道（1,1），MINI_SIGN_SALT 管小程序通道（1,5），两者不可互换。
-          # IOS_SIGN_SALT 是 iOS 平台专属盐（服务端按 UA 选盐），发版必填。
-          for f in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
-            grep -q "^$f=..*$" secrets.properties || { echo "::error::release secrets.$f 未配置"; exit 1; }
-          done
+          set -euo pipefail
+          marketing="$(
+            sed -n 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*\(.*\)/\1/p' \
+              iosApp/Configuration/Config.xcconfig | tr -d '[:space:]' | head -n 1
+          )"
+          app_version="${{ steps.setup.outputs.version-name }}"
+          ok=1
+          if [ "$GITHUB_REF_NAME" != "v$app_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 androidApp versionName $app_version 不一致"
+            ok=0
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$marketing" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 iOS MARKETING_VERSION $marketing 不一致"
+            ok=0
+          fi
+          test "$ok" = "1"
 
       - name: Build unsigned IPA
         run: ./iosApp/scripts/build-unsigned-ipa.sh
 
       - name: Upload unsigned IPA artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ilife798-${{ github.ref_name }}-unsigned-ios-ipa
           path: iosApp/build/dist/*.ipa
           if-no-files-found: error
 
+      # Android 与 iOS 都在同一个 release 上追加产物，谁先跑完谁先建。
+      # 这里不指定 --latest：正式发版由 Android job 或人工确认后设定。
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(iosApp/build/dist/*.ipa)
+          set -euo pipefail
+          mapfile -t assets < <(find "$IPA_DIR" -name '*.ipa')
+          test ${#assets[@]} -gt 0 || { echo '::error::没有找到 IPA'; exit 1; }
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --generate-notes \
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" --generate-notes \
               || gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           fi

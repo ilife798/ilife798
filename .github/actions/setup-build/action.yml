@@ -1,0 +1,240 @@
+name: Set up build environment
+description: |
+  收敛三个 workflow 共用的准备步骤：checkout 后的 JDK / Android SDK / Gradle 准备，
+  以及生成 secrets.properties。SDK 版本从 Gradle 构建脚本读取，避免与 workflow 各写一份。
+
+# 为什么要抽成 composite action：
+# 原先 android.yml / ios.yml / prerelease.yml 各自维护一份 setup + secrets 生成，
+# 共 5 份重复。新增一个密钥字段（例如 IOS_SIGN_SALT）要同时改 5 处，
+# 漏改任何一处都会产出「能装但功能不可用」的包。
+#
+# 注意：composite action 内不能直接引用 secrets.*，必须由调用方通过 with 传入。
+#
+# 所有第三方 action 均 pin 到 commit SHA：浮动 tag 可被上游改写，
+# 是供应链攻击的常见入口（与本仓库既有 android.yml 的做法保持一致）。
+
+inputs:
+  api-gateway:
+    description: 后端网关地址（对应 secrets.API_GATEWAY）
+    required: false
+    default: ''
+  sign-salt:
+    description: Android App 通道（1,1）验签盐
+    required: false
+    default: ''
+  mini-sign-salt:
+    description: 小程序通道（1,5）验签盐，与 SIGN_SALT 不可互换
+    required: false
+    default: ''
+  ios-sign-salt:
+    description: iOS 平台专属验签盐（服务端按 UA 选盐），仅 iOS job 传
+    required: false
+    default: ''
+  api-cid:
+    description: 后端 cid
+    required: false
+    default: ''
+  require-ios-salt:
+    description: |
+      是否把 IOS_SIGN_SALT 视为必需。只有 iOS job 置 true。
+      不能用「值是否为空」判断——密钥没配置时值就是空，那样会静默跳过校验，
+      正好漏掉「iOS 登录必然验签失败」这一种最需要拦住的情况。
+    required: false
+    default: 'false'
+  secrets-mode:
+    description: |
+      warn  = 缺失只告警，构建继续（validate / 预发布用）
+      fail  = 缺失直接失败（发版用）
+    required: false
+    default: 'warn'
+  setup-android-sdk:
+    description: 是否准备 Android SDK。iOS job 编 shared 模块仍需它，故默认 true
+    required: false
+    default: 'true'
+  cache-konan:
+    description: 是否缓存 Kotlin/Native 工具链（仅 macOS runner 有意义）
+    required: false
+    default: 'false'
+  checkout:
+    description: 是否执行 checkout。调用方已 checkout 时置 false
+    required: false
+    default: 'true'
+  persist-credentials:
+    description: checkout 是否保留凭据。发布 job 建议 false
+    required: false
+    default: 'true'
+
+outputs:
+  compile-sdk:
+    description: 从 Gradle 脚本读到的 compileSdk
+    value: ${{ steps.sdk-version.outputs.compile_sdk }}
+  build-tools:
+    description: 实际安装的最新 build-tools 版本
+    value: ${{ steps.sdk-install.outputs.build_tools }}
+  version-name:
+    description: androidApp 的 versionName
+    value: ${{ steps.sdk-version.outputs.version_name }}
+  app-tag:
+    description: 由 versionName 推导的 tag 名（vX.Y.Z）
+    value: ${{ steps.sdk-version.outputs.app_tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      if: inputs.checkout == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: ${{ inputs.persist-credentials }}
+
+    # Kotlin/Native 工具链缓存放在 SDK 之前：命中缓存时能省掉大量下载
+    - name: Cache Kotlin/Native toolchain
+      if: inputs.cache-konan == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.konan
+        key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+        restore-keys: |
+          konan-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Set up JDK
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+      with:
+        distribution: temurin
+        java-version: '21'
+
+    # 版本唯一的真实来源是 Gradle 脚本：compileSdk 决定要装哪个 platform，
+    # versionName 决定 tag。此前 workflow 里另外硬编码了一份 android-37.0，
+    # AGP 升级到 compileSdk 38 时必须同时改 workflow，否则直接找不到 SDK。
+    - name: Resolve SDK version from Gradle scripts
+      id: sdk-version
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # compileSdk 同时出现在 androidApp 与 shared，两处应保持一致；
+        # 优先读 androidApp（应用模块是构建入口），读不到再退到 shared。
+        compile_sdk="$(
+          sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' \
+            androidApp/build.gradle.kts 2>/dev/null | head -n 1
+        )"
+        if [ -z "$compile_sdk" ]; then
+          compile_sdk="$(
+            sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' \
+              shared/build.gradle.kts 2>/dev/null | head -n 1
+          )"
+        fi
+        test -n "$compile_sdk" || { echo '::error::无法从 Gradle 脚本解析 compileSdk'; exit 1; }
+
+        version_name="$(
+          sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' androidApp/build.gradle.kts | head -n 1
+        )"
+        test -n "$version_name" || { echo '::error::无法从 androidApp/build.gradle.kts 解析 versionName'; exit 1; }
+
+        {
+          echo "compile_sdk=$compile_sdk"
+          echo "version_name=$version_name"
+          echo "app_tag=v$version_name"
+          echo "sdk_packages=platforms;android-${compile_sdk}.0"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "compileSdk=$compile_sdk versionName=$version_name"
+
+    - name: Set up Android SDK
+      if: inputs.setup-android-sdk == 'true'
+      uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+      with:
+        packages: 'platform-tools'
+
+    - name: Install Android platform and build-tools
+      id: sdk-install
+      if: inputs.setup-android-sdk == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sdkmanager "${{ steps.sdk-version.outputs.sdk_packages }}"
+
+        # build-tools 里带 apksigner，发版校验签名要用到，必须装。
+        # 版本取 SDK 仓库中可用的最新一版，不写死（此前硬编码 36.0.0，升级后路径失效）。
+        latest="$(
+          sdkmanager --list 2>/dev/null \
+            | sed -n 's/^[[:space:]]*build-tools;\([0-9][0-9.]*\).*/\1/p' \
+            | sort -V | tail -n 1
+        )"
+        if [ -z "$latest" ]; then
+          echo '::warning::无法从 sdkmanager 列表解析 build-tools 版本，跳过安装'
+        else
+          sdkmanager "build-tools;${latest}"
+        fi
+
+        installed="$(ls "${ANDROID_HOME}/build-tools" 2>/dev/null | sort -V | tail -n 1 || true)"
+        echo "build_tools=$installed" >> "$GITHUB_OUTPUT"
+        echo "build-tools=${installed:-<none>}"
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+
+    - name: Grant execute permission for gradlew
+      shell: bash
+      run: chmod +x ./gradlew
+
+    - name: Generate secrets.properties
+      shell: bash
+      env:
+        API_GATEWAY: ${{ inputs.api-gateway }}
+        SIGN_SALT: ${{ inputs.sign-salt }}
+        MINI_SIGN_SALT: ${{ inputs.mini-sign-salt }}
+        IOS_SIGN_SALT: ${{ inputs.ios-sign-salt }}
+        API_CID: ${{ inputs.api-cid }}
+        SECRETS_MODE: ${{ inputs.secrets-mode }}
+        REQUIRE_IOS_SALT: ${{ inputs.require-ios-salt }}
+      run: |
+        set -euo pipefail
+
+        : > secrets.properties
+        for name in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
+          value="${!name:-}"
+          printf '%s=%s\n' "$name" "$value" >> secrets.properties
+        done
+
+        # 密钥矩阵（服务端按 UA + ApplicationType 选盐，配错一律「验签失败」）：
+        #   Android App   通道 1,1 → SIGN_SALT
+        #   Android 小程序 通道 1,5 → MINI_SIGN_SALT
+        #   iOS App       通道 1,1 → IOS_SIGN_SALT（缺失会回退 SIGN_SALT，表现为 iOS 登录失败）
+        #   iOS 小程序     通道 1,5 → MINI_SIGN_SALT
+        # IOS_SIGN_SALT 对 Android job 无意义：只有 iOS job 通过 require-ios-salt 声明需要它。
+        required="API_GATEWAY SIGN_SALT MINI_SIGN_SALT API_CID"
+        if [ "$REQUIRE_IOS_SALT" = "true" ]; then
+          required="$required IOS_SIGN_SALT"
+        fi
+
+        missing=()
+        for name in $required; do
+          if ! grep -q "^${name}=..*$" secrets.properties; then missing+=("$name"); fi
+        done
+
+        if [ ${#missing[@]} -eq 0 ]; then
+          echo "所有必需密钥已配置"
+          exit 0
+        fi
+
+        if [ "$SECRETS_MODE" = "fail" ]; then
+          for name in "${missing[@]}"; do echo "::error::release secrets.${name} 未配置"; done
+          exit 1
+        fi
+        for name in "${missing[@]}"; do
+          echo "::warning::secrets.${name} 未配置——构建可用，但需签名的接口会验签失败"
+        done
+
+    # 这些变量供后续 step 的 shell 直接引用（$APK_RELEASE_DIR 等）。
+    # 不要在 uses.with 里写成 ${{ env.APK_RELEASE_DIR }}：workflow 的 env 段并未声明它们，
+    # 运行时才由 $GITHUB_ENV 注入，表达式求值阶段取不到，且静态检查会报「Context access might be invalid」。
+    # 需要传给 action 的路径一律写相对路径（如 androidApp/build/outputs/apk/debug），更直观也不会错。
+    - name: Export artifact paths
+      shell: bash
+      run: |
+        {
+          echo "APK_RELEASE_DIR=${GITHUB_WORKSPACE}/androidApp/build/outputs/apk/release"
+          echo "APK_DEBUG_DIR=${GITHUB_WORKSPACE}/androidApp/build/outputs/apk/debug"
+          echo "IPA_DIR=${GITHUB_WORKSPACE}/iosApp/build/dist"
+        } >> "$GITHUB_ENV"
