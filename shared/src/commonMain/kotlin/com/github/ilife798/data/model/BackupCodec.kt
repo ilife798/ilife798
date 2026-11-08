@@ -10,8 +10,19 @@ private val backupJson =
         encodeDefaults = true
     }
 
+// 剪贴板与二维码用的紧凑格式：不带缩进换行，尽量压缩体积（二维码容量有限）
+private val backupJsonCompact =
+    Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+        encodeDefaults = true
+    }
+
 /** 序列化备份文档为可写入文件的文本。 */
 fun encodeBackup(doc: BackupDocument): String = backupJson.encodeToString(doc)
+
+/** 序列化为单行 JSON，用于剪贴板与二维码导出。 */
+fun encodeBackupCompact(doc: BackupDocument): String = backupJsonCompact.encodeToString(doc)
 
 /**
  * 解析备份文本。解析失败或内容为空返回 null，由调用方提示用户文件无效，

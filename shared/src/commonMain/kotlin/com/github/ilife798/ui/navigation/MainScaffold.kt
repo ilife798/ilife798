@@ -36,11 +36,14 @@ import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
+import com.github.ilife798.data.model.BackupDocument
 import com.github.ilife798.data.model.ImportPreview
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.showToast
 import com.github.ilife798.ui.page.account.AccountPage
+import com.github.ilife798.ui.page.backup.BackupExportPage
 import com.github.ilife798.ui.page.backup.BackupImportPage
+import com.github.ilife798.ui.page.backup.BackupImportSourcePage
 import com.github.ilife798.ui.page.backup.BackupPage
 import com.github.ilife798.ui.page.bill.BillDetailPage
 import com.github.ilife798.ui.page.bill.BillPage
@@ -340,6 +343,13 @@ fun MainScaffold(viewModel: AppViewModel) {
     val nextImportToken: () -> Long = {
         importToken.value += 1
         importToken.value
+    }
+    // 待导出的备份文档同样只存会话内：含账号凭据，不写盘、不进路由参数
+    var pendingBackupExport by remember { mutableStateOf<BackupDocument?>(null) }
+    val exportToken = remember { mutableStateOf(0L) }
+    val nextExportToken: () -> Long = {
+        exportToken.value += 1
+        exportToken.value
     }
 
     val onBack: () -> Unit =
@@ -651,6 +661,34 @@ fun MainScaffold(viewModel: AppViewModel) {
             entry<Page.Backup>(transition = detailTransition) {
                 NavEntry(interceptPredictiveBack, onBack) {
                     BackupPage(
+                        viewModel = viewModel,
+                        onBack = onBack,
+                        onExportReady = { doc ->
+                            pendingBackupExport = doc
+                            navigate(Page.BackupExport(token = nextExportToken()))
+                        },
+                        onImportClick = { navigate(Page.BackupImportSource) },
+                    )
+                }
+            }
+            entry<Page.BackupExport>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    val doc = pendingBackupExport
+                    if (doc == null) {
+                        // 进程被回收后暂存内容已丢失，直接退回避免空白页
+                        LaunchedEffect(Unit) { onBack() }
+                    } else {
+                        BackupExportPage(
+                            doc = doc,
+                            blurBackdropEnabled = viewModel.state.appBlur,
+                            onBack = onBack,
+                        )
+                    }
+                }
+            }
+            entry<Page.BackupImportSource>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    BackupImportSourcePage(
                         viewModel = viewModel,
                         onBack = onBack,
                         onImportReady = { preview ->

@@ -47,6 +47,18 @@ sealed class Page : NavKey {
     @Serializable data object Backup : Page()
 
     /**
+     * 备份导出方式页：文件 / 剪贴板 / 二维码。
+     * 与 [BackupImport] 一样只带会话内令牌，真正的备份文档由 MainScaffold 暂存，
+     * 避免把凭据塞进可被系统持久化的路由参数。
+     */
+    @Serializable data class BackupExport(
+        val token: Long,
+    ) : Page()
+
+    /** 备份导入方式页：文件 / 剪贴板 / 扫码。 */
+    @Serializable data object BackupImportSource : Page()
+
+    /**
      * 导入备份页。预览数据无法放进路由参数（含账号凭据，且结构较大），因此只带一个
      * 会话内的令牌，真正的 [com.github.ilife798.data.model.ImportPreview] 由
      * MainScaffold 在发起导入时暂存。

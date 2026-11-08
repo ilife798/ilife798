@@ -8,3 +8,6 @@ actual fun copyTextToClipboard(text: String): Boolean =
         UIPasteboard.generalPasteboard.string = text
         true
     }.getOrDefault(false)
+
+actual fun readTextFromClipboard(): String? =
+    runCatching { UIPasteboard.generalPasteboard.string?.takeIf { it.isNotBlank() } }.getOrNull()
