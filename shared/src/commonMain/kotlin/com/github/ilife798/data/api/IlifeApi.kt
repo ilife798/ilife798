@@ -14,6 +14,8 @@ import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.WalletAccount
 import com.github.ilife798.util.currentTimeMillis
+import com.github.ilife798.util.getDayOfWeek
+import com.github.ilife798.util.getTodayStart
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
@@ -38,6 +40,9 @@ import kotlinx.serialization.json.jsonPrimitive
 
 // 时间戳毫秒/秒归一阈值（约 1973-03，秒级远小于此值、毫秒级远大于此值）
 private const val MILLIS_THRESHOLD = 100_000_000_000L
+
+// 一天的毫秒数，用于把「今天零点」回退到本周一零点
+private const val DAY_MILLIS = 86_400_000L
 
 // 响应体缺少 code 字段时的哨兵值，与任何真实业务码都不相等
 internal const val CODE_UNKNOWN = Int.MIN_VALUE
@@ -646,6 +651,35 @@ class IlifeApi(
             else -> value
         }
 
+    /*
+     * 签到状态位图只对「签到时间所在的那一周」有效。
+     *
+     * daily.week 是本周已签位图（第 n 位置位 = 本周第 n 天已签），但它不会在跨周瞬间清零：
+     * 实测 2026-11-09（周一）服务端仍返回前一日（11-08 周日）的 week=127，七位全置。
+     * 若直接按「今天位是否置位」判断，周一必然读成「今日已签到」，导致整轮任务不跑。
+     *
+     * daily.ltime 是签到时间（不是 limits 的快照时间——抓包中相隔 11 分钟的两次请求
+     * limits 由 4 变为 -1，而 ltime 未变），因此只能用它判断位图归属周。
+     * 跨周即视为本周尚无签到记录，位图整段作废。
+     */
+    private fun weeklySignMask(
+        week: Int?,
+        signTime: Long?,
+    ): Int {
+        val mask = week ?: return 0
+        if (mask == 0) return 0
+        // 缺时间戳时无法判断归属周，保持旧行为，不额外收紧
+        if (signTime == null || signTime <= 0L) return mask
+        return if (signTime < weekStartMillis(currentTimeMillis())) 0 else mask
+    }
+
+    // 本周起始（周一 00:00）的毫秒时间戳。经 getTodayStart 归一，避免夏令时导致的偏移。
+    private fun weekStartMillis(now: Long): Long {
+        val todayStart = getTodayStart(now)
+        val offsetDays = (getDayOfWeek() - 1).coerceAtLeast(0)
+        return getTodayStart(todayStart - offsetDays * DAY_MILLIS)
+    }
+
     private fun parseDevResult(
         raw: String,
         reportError: Boolean = true,
@@ -705,10 +739,19 @@ class IlifeApi(
                 scoreHeaders(token, isApp)
             }
         val body = bodyJson(response)
-        // 积分汇总走独立的 acc/score/acc-score 接口，比从 mission-lst 里取更可靠。
-        // 这里容错：积分查询失败时任务列表仍可用（仅少了汇总数字），
-        // 但 executeMission 的到账核验会另行走 getPointsSummary 并严格校验。
         val data = body.obj("data") ?: return MissionListResult(emptyList())
+        /*
+         * 任务进度必须取 mission-lst 响应自带的 accScoreRsp。
+         *
+         * acc-score 是「积分账户汇总」，其 daily 段是上一次结算的快照：实测 2026-11-09 仍返回
+         * 前一日（11-08 周日）的 week=127 与满额 limits，于是任务页把昨天读成「今日已完成」，
+         * 运行按钮被禁用。accScoreRsp 与任务清单出自同一次响应，天然同刻一致，实测其 limits
+         * 与官方客户端行为吻合。
+         *
+         * 积分汇总数字（validScore/totalScore）是累计值、跨天不重置，仍沿用独立 acc-score
+         * 以保持与到账核验同一口径；仅在它缺失时回落到同响应。
+         */
+        val sameResponse = data.obj("accScoreRsp")
         val accScore =
             try {
                 getPointsBody(token, isApp)
@@ -717,16 +760,20 @@ class IlifeApi(
             } catch (_: Exception) {
                 null
             }
-        val validScore = accScore?.intOrNull("validScore")
-        val totalScore = accScore?.intOrNull("totalScore")
-        val weekMask = accScore?.obj("daily")?.intOrNull("week") ?: 0
+        val validScore = accScore?.intOrNull("validScore") ?: sameResponse?.intOrNull("validScore")
+        val totalScore = accScore?.intOrNull("totalScore") ?: sameResponse?.intOrNull("totalScore")
+
+        // 进度优先同响应；同响应缺 limits 时才退回 acc-score，避免把「全未完成」当成最新
+        val progress: JsonObject? = sameResponse?.takeIf { it.arr("limits") != null } ?: accScore
+        val dailySignTime = progress?.obj("daily")?.longOrNull("ltime")?.let { timeToMillis(it) }
+        val weekMask = weeklySignMask(progress?.obj("daily")?.intOrNull("week"), dailySignTime)
         val dailyRsp = data.obj("dailyRSP")
         val dailyAdId = dailyRsp?.str("adId") ?: ""
         val dailyScore = dailyRsp?.intOrNull("score") ?: 5
 
         // -1 表示今日已达上限；其余异常进度不能当成 0 次继续提交。
-        // accScore 可为 null（积分查询失败容错），此时视为无进度数据。
-        val limitsArray = accScore?.arr("limits") ?: emptyList()
+        // progress 可为 null（两个来源都取不到），此时视为无进度数据。
+        val limitsArray = progress?.arr("limits") ?: emptyList()
         val dailyDoneMap = mutableMapOf<String, Int>()
         for (item in limitsArray) {
             val obj = item.jsonObject
@@ -744,6 +791,7 @@ class IlifeApi(
                 dailyAdId,
                 dailyScore,
                 totalScore,
+                dailySignTime,
             )
         val seen = mutableSetOf<String>()
         val list =
@@ -776,7 +824,7 @@ class IlifeApi(
                 list
             }
 
-        return MissionListResult(allMissions, validScore, weekMask, dailyAdId, dailyScore, totalScore)
+        return MissionListResult(allMissions, validScore, weekMask, dailyAdId, dailyScore, totalScore, dailySignTime)
     }
 
     suspend fun executeMission(

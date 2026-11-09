@@ -80,6 +80,8 @@ data class MissionListResult(
     val dailyAdId: String = "",
     val dailyScore: Int = 5,
     val totalScore: Int? = null,
+    /** 服务端记录的签到时间（毫秒）。位图归属周按它判定，跨周时 weekMask 会被归零。 */
+    val dailySignTime: Long? = null,
 )
 
 data class ScoreDto(

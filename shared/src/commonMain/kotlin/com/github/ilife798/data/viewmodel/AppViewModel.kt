@@ -1433,8 +1433,6 @@ class AppViewModel : ViewModel() {
 
     fun stopTasks() = task.stop()
 
-    fun setTaskCompleted() = task.setCompleted()
-
     fun refreshTasks() = task.refresh()
 
     // 回到前台时按服务端数据重新推导完成态（跨零点后本地状态不再可靠）

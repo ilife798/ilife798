@@ -575,10 +575,6 @@ class TaskController(
         onToast("积分任务已停止")
     }
 
-    fun setCompleted() {
-        setState { it.copy(taskCompleted = true) }
-    }
-
     // 下拉刷新：运行中只更新完成情况并保留日志；未运行时刷新任务列表并清空隐藏日志
     fun refresh() {
         if (tasksRefreshing) return
