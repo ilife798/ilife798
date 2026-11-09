@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +43,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonColors
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -52,7 +54,6 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Copy
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -257,21 +258,32 @@ fun TasksPage(
                                 }
                             }
                             Spacer(Modifier.height(4.dp))
-                            TextButton(
+                            // TextButton 只有 text: String 重载，塞不进图标；它本身就是
+                            // Button + 固定文案 + 颜色映射，这里改用 Button 走等价配色，
+                            // 渲染结果与原来一致，同时能容纳左侧的加载图标。
+                            // 运行中从主色换成常规色：此时按钮语义已变成「停止」，
+                            // 继续用主色会让人以为还能再发起一轮。
+                            val textButtonColors =
+                                if (isLoading || batching) {
+                                    ButtonDefaults.textButtonColors()
+                                } else {
+                                    ButtonDefaults.textButtonColorsPrimary()
+                                }
+                            Button(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
                                     if (isLoading) {
                                         showStopDialog = true
-                                        return@TextButton
+                                        return@Button
                                     }
-                                    if (batching) return@TextButton
+                                    if (batching) return@Button
                                     // 按账号顺序拍下 (uid, 原下标) 快照，后续一律用 uid 定位。
                                     // uid 异常为空时退回原下标，不至于被静默跳过。
                                     val targets =
                                         selectedAccounts
                                             .sorted()
                                             .map { index -> uidOf(index) to index }
-                                    if (targets.isEmpty()) return@TextButton
+                                    if (targets.isEmpty()) return@Button
                                     batching = true
                                     batchJob =
                                         batchScope.launch {
@@ -316,14 +328,28 @@ fun TasksPage(
                                             }
                                         }
                                 },
-                                text =
-                                    when {
-                                        isLoading || batching -> "运行中，点击停止"
-                                        else -> "运行选中账号（${selectedAccounts.size}）"
-                                    },
                                 enabled = batching || isLoading || selectedAccounts.isNotEmpty(),
-                                colors = ButtonDefaults.textButtonColorsPrimary(),
-                            )
+                                colors =
+                                    ButtonColors(
+                                        color = textButtonColors.color,
+                                        disabledColor = textButtonColors.disabledColor,
+                                        contentColor = textButtonColors.textColor,
+                                        disabledContentColor = textButtonColors.disabledTextColor,
+                                    ),
+                            ) {
+                                if (isLoading || batching) {
+                                    LoadingSpinner()
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text =
+                                        when {
+                                            isLoading || batching -> "运行中，点击停止"
+                                            else -> "运行选中账号（${selectedAccounts.size}）"
+                                        },
+                                    style = MiuixTheme.textStyles.button,
+                                )
+                            }
                         }
                     }
                 }
