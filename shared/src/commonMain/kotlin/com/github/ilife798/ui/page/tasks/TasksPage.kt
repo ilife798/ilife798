@@ -164,6 +164,9 @@ fun TasksPage(
 
                 if (accountRows.size > 1) {
                     val selectable = accountRows.indices.filter { accountRows[it].account.hasAnyToken }
+                    // 运行期间禁止改选账号。批量循环会主动切号，此时改选会让 uid 快照与实际账号错位；
+                    // 单账号运行同理，切号会让正在发出的请求落到另一个账号上。
+                    val selectionLocked = isLoading || batching
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             SectionHeader("账号")
@@ -172,7 +175,7 @@ fun TasksPage(
                                 modifier =
                                     Modifier
                                         .fillMaxWidth()
-                                        .clickable(enabled = selectable.isNotEmpty()) {
+                                        .clickable(enabled = selectable.isNotEmpty() && !selectionLocked) {
                                             selectedAccounts =
                                                 if (selectedAccounts.size == selectable.size) emptySet() else selectable.toSet()
                                         }.padding(vertical = 6.dp),
@@ -194,6 +197,7 @@ fun TasksPage(
                                         selectedAccounts =
                                             if (selectedAccounts.size == selectable.size) emptySet() else selectable.toSet()
                                     },
+                                    enabled = selectable.isNotEmpty() && !selectionLocked,
                                 )
                             }
                             accountRows.forEachIndexed { index, entry ->
@@ -203,7 +207,7 @@ fun TasksPage(
                                     modifier =
                                         Modifier
                                             .fillMaxWidth()
-                                            .clickable {
+                                            .clickable(enabled = !selectionLocked) {
                                                 selectedAccounts =
                                                     if (checked) {
                                                         selectedAccounts - index
@@ -248,6 +252,7 @@ fun TasksPage(
                                             selectedAccounts =
                                                 if (checked) selectedAccounts - index else selectedAccounts + index
                                         },
+                                        enabled = !selectionLocked,
                                     )
                                 }
                             }
