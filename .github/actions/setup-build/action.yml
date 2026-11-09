@@ -8,7 +8,10 @@ description: |
 # 共 5 份重复。新增一个密钥字段（例如 IOS_SIGN_SALT）要同时改 5 处，
 # 漏改任何一处都会产出「能装但功能不可用」的包。
 #
-# 注意：composite action 内不能直接引用 secrets.*，必须由调用方通过 with 传入。
+# 注意 1：composite action 内不能直接引用 secrets.*，必须由调用方通过 with 传入。
+# 注意 2：本地 action（uses: ./...）在步骤解析阶段就要求仓库已检出，
+#        因此 checkout 必须写在调用方的 workflow 里，不能放在本 action 内——
+#        否则会报 "Can't find 'action.yml' ... Did you forget to run actions/checkout"。
 #
 # 所有第三方 action 均 pin 到 commit SHA：浮动 tag 可被上游改写，
 # 是供应链攻击的常见入口（与本仓库既有 android.yml 的做法保持一致）。
@@ -55,14 +58,6 @@ inputs:
     description: 是否缓存 Kotlin/Native 工具链（仅 macOS runner 有意义）
     required: false
     default: 'false'
-  checkout:
-    description: 是否执行 checkout。调用方已 checkout 时置 false
-    required: false
-    default: 'true'
-  persist-credentials:
-    description: checkout 是否保留凭据。发布 job 建议 false
-    required: false
-    default: 'true'
 
 outputs:
   compile-sdk:
@@ -81,12 +76,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Checkout
-      if: inputs.checkout == 'true'
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: ${{ inputs.persist-credentials }}
-
     # Kotlin/Native 工具链缓存放在 SDK 之前：命中缓存时能省掉大量下载
     - name: Cache Kotlin/Native toolchain
       if: inputs.cache-konan == 'true'
@@ -115,12 +104,12 @@ runs:
         # compileSdk 同时出现在 androidApp 与 shared，两处应保持一致；
         # 优先读 androidApp（应用模块是构建入口），读不到再退到 shared。
         compile_sdk="$(
-          sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' \
+          sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
             androidApp/build.gradle.kts 2>/dev/null | head -n 1
         )"
         if [ -z "$compile_sdk" ]; then
           compile_sdk="$(
-            sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' \
+            sed -n 's/^[[:space:]]*compileSdk[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
               shared/build.gradle.kts 2>/dev/null | head -n 1
           )"
         fi
@@ -156,10 +145,11 @@ runs:
 
         # build-tools 里带 apksigner，发版校验签名要用到，必须装。
         # 版本取 SDK 仓库中可用的最新一版，不写死（此前硬编码 36.0.0，升级后路径失效）。
+        # 分段数值排序而非 sort -V：macOS 的 BSD sort 不支持 -V，两端需通用。
         latest="$(
           sdkmanager --list 2>/dev/null \
             | sed -n 's/^[[:space:]]*build-tools;\([0-9][0-9.]*\).*/\1/p' \
-            | sort -V | tail -n 1
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1
         )"
         if [ -z "$latest" ]; then
           echo '::warning::无法从 sdkmanager 列表解析 build-tools 版本，跳过安装'
@@ -167,9 +157,9 @@ runs:
           sdkmanager "build-tools;${latest}"
         fi
 
-        installed="$(ls "${ANDROID_HOME}/build-tools" 2>/dev/null | sort -V | tail -n 1 || true)"
-        echo "build_tools=$installed" >> "$GITHUB_OUTPUT"
-        echo "build-tools=${installed:-<none>}"
+        # 不回头扫目录：装的就是 latest，直接把它交给 apksigner
+        echo "build_tools=$latest" >> "$GITHUB_OUTPUT"
+        echo "build-tools=${latest:-<none>}"
 
     - name: Set up Gradle
       uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
@@ -192,10 +182,15 @@ runs:
         set -euo pipefail
 
         : > secrets.properties
-        for name in API_GATEWAY SIGN_SALT MINI_SIGN_SALT IOS_SIGN_SALT API_CID; do
-          value="${!name:-}"
-          printf '%s=%s\n' "$name" "$value" >> secrets.properties
-        done
+        # 显式逐行写入，不用 ${!name} 间接展开：macOS runner 的 bash 3.2 对
+        # 间接展开与默认值的组合行为不一致，这里宁可比循环多几行。
+        {
+          printf 'API_GATEWAY=%s\n' "$API_GATEWAY"
+          printf 'SIGN_SALT=%s\n' "$SIGN_SALT"
+          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT"
+          printf 'IOS_SIGN_SALT=%s\n' "$IOS_SIGN_SALT"
+          printf 'API_CID=%s\n' "$API_CID"
+        } > secrets.properties
 
         # 密钥矩阵（服务端按 UA + ApplicationType 选盐，配错一律「验签失败」）：
         #   Android App   通道 1,1 → SIGN_SALT

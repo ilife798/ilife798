@@ -6,11 +6,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    # 与 android.yml 对称：只改 Android 侧或 workflow 本身时不必跑 macOS 构建
+    # 只跳过与 iOS 产物无关的路径。workflow / action 自身的改动**不能**跳过：
+    # 否则流水线改错了永远得不到验证（本项目确实这样踩过一次）。
     paths-ignore:
       - 'androidApp/**'
-      - '.github/workflows/**'
-      - '.github/actions/**'
       - '**/*.md'
   workflow_dispatch:
 
@@ -35,6 +34,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 40
     steps:
+      # 本地 action 必须先检出仓库才能被解析，故 checkout 在 workflow 侧而非 action 内
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
       - name: Set up build environment
         uses: ./.github/actions/setup-build
         with:
@@ -68,6 +72,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
       - name: Set up build environment
         id: setup
         uses: ./.github/actions/setup-build
@@ -80,7 +88,6 @@ jobs:
           secrets-mode: fail
           require-ios-salt: 'true'
           cache-konan: 'true'
-          persist-credentials: 'false'
 
       # 版本号有两处来源，且发版前必须同时改好：
       #   androidApp/build.gradle.kts 的 versionName → Android 包版本
@@ -122,7 +129,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find "$IPA_DIR" -name '*.ipa')
+          # 不用 mapfile：macOS runner 自带 bash 3.2，没有该内建命令
+          shopt -s nullglob
+          assets=("$IPA_DIR"/*.ipa)
+          shopt -u nullglob
           test ${#assets[@]} -gt 0 || { echo '::error::没有找到 IPA'; exit 1; }
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber

@@ -6,11 +6,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    # workflow 文件本身的改动不需要跑完整构建；iosApp 只影响 iOS 产物
+    # 只跳过与 Android 产物无关的路径。workflow / action 自身的改动**不能**跳过：
+    # 否则流水线改错了永远得不到验证（本项目确实这样踩过一次）。
     paths-ignore:
       - 'iosApp/**'
-      - '.github/workflows/**'
-      - '.github/actions/**'
       - '**/*.md'
   workflow_dispatch:
     inputs:
@@ -42,6 +41,9 @@ jobs:
       MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
     steps:
+      # 本地 action 必须先检出仓库才能被解析，故 checkout 在 workflow 侧而非 action 内
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Set up build environment
         id: setup
         uses: ./.github/actions/setup-build
@@ -88,6 +90,8 @@ jobs:
       MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Set up build environment
         id: setup
         uses: ./.github/actions/setup-build
@@ -97,7 +101,6 @@ jobs:
           mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
           api-cid: ${{ secrets.API_CID }}
           secrets-mode: fail
-          persist-credentials: 'false'
 
       - name: Configure release signing
         env:
@@ -181,6 +184,8 @@ jobs:
       MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
       API_CID: ${{ secrets.API_CID }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Set up build environment
         id: setup
         uses: ./.github/actions/setup-build
@@ -190,7 +195,6 @@ jobs:
           mini-sign-salt: ${{ secrets.MINI_SIGN_SALT }}
           api-cid: ${{ secrets.API_CID }}
           secrets-mode: warn
-          persist-credentials: 'false'
 
       # 有签名密钥就出签名包，否则退回 debug 包（保证预发布始终可用）
       - name: Configure release signing (optional)
