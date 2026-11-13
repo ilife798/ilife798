@@ -18,6 +18,9 @@ dependencies {
     implementation(project(":shared"))
 
     implementation(libs.androidx.activity.compose)
+    // TaskBackgroundWorker 与 TaskAlarmReceiver 直接使用 WorkManager API；
+    // shared 模块里的 implementation 不会传递到这里，必须显式声明。
+    implementation(libs.androidx.work.runtime)
 }
 
 val localProps =

@@ -3,6 +3,7 @@ agp = "9.4.1"
 androidx-activity = "1.13.0"
 androidx-lifecycle = "2.11.0"
 androidx-camera = "1.6.2"
+androidx-work = "2.12.0"
 zxing = "3.5.4"
 coil = "3.6.3"
 composeMultiplatform = "1.12.0"
@@ -25,6 +26,7 @@ androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "androidx-camera" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "androidx-camera" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "androidx-camera" }
+androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }

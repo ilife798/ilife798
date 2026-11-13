@@ -132,8 +132,23 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- 定时任务：闹钟到点由 Activity 型 PendingIntent 拉起本应用执行，
-             不注册服务；这里只需要接收开机与升级广播重排闹钟 -->
+        <!-- WorkManager 的 expedited 任务通过这个服务提升优先级。
+             Android 14+ 要求它必须声明前台服务类型，否则会抛 MissingForegroundServiceTypeException；
+             这里按数据同步类型声明，与定时任务的实际用途一致。 -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- 定时任务：闹钟到点有两个落点，
+             ① 前台运行 → Activity 型 PendingIntent 直接拉起本应用，不经过接收器；
+             ② 后台运行 → 广播型 PendingIntent 到这里，再交给 WorkManager 调度执行 -->
+        <receiver
+            android:name=".TaskAlarmReceiver"
+            android:exported="false" />
+
+        <!-- 开机与升级后重排闹钟：系统广播的发送方是系统进程，必须导出；
+             两个 action 都是受保护广播，外部应用无法伪造 -->
         <receiver
             android:name=".TaskBootReceiver"
             android:exported="true">

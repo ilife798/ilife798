@@ -104,6 +104,59 @@ internal fun buildTaskNotification(
     return builder.build()
 }
 
+/**
+ * 后台定时任务的进度通知：视觉与 [buildTaskNotification] 完全一致，
+ * 只是正文由调用方直接给出（后台执行只有账号级粗进度，没有「任务名 (X/X)」）。
+ */
+fun buildTaskNotification(
+    context: Context,
+    text: String,
+): Notification {
+    val builder =
+        Notification
+            .Builder(context, CHANNEL_TASK)
+            .setSmallIcon(appIconRes(context))
+            .setContentTitle("积分任务运行中")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentIntent(
+                activityPendingIntent(
+                    context,
+                    REQUEST_TASK_CONTENT,
+                    IntentActions.ACTION_OPEN_TASKS,
+                    deviceId = null,
+                ),
+            ).setCategory(Notification.CATEGORY_PROGRESS)
+            .setGroup(RUN_NOTIFICATION_GROUP)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setOngoing(true)
+    builder.setProgress(0, 0, true)
+    return builder.build()
+}
+
+/** 后台定时任务的结果汇总：一账号一行，可划掉，点击进任务页。 */
+fun buildTaskResultNotification(
+    context: Context,
+    title: String,
+    text: String,
+): Notification =
+    Notification
+        .Builder(context, CHANNEL_TASK)
+        .setSmallIcon(appIconRes(context))
+        .setContentTitle(title)
+        .setContentText(text.lineSequence().firstOrNull().orEmpty())
+        .setStyle(Notification.BigTextStyle().bigText(text))
+        .setContentIntent(
+            activityPendingIntent(
+                context,
+                REQUEST_TASK_CONTENT,
+                IntentActions.ACTION_OPEN_TASKS,
+                deviceId = null,
+            ),
+        ).setAutoCancel(true)
+        .build()
+
 private fun stopDeviceAction(
     context: Context,
     deviceId: String,

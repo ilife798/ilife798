@@ -144,6 +144,8 @@ kotlin {
             implementation(libs.androidx.camera.lifecycle)
             implementation(libs.androidx.camera.view)
             implementation(libs.zxing.core)
+            // 定时任务的「后台运行」：Android 12+ 禁止后台启动前台服务，后台执行只能交给 WorkManager 调度
+            implementation(libs.androidx.work.runtime)
         }
         iosMain.dependencies {
             implementation(libs.ktor.darwin)

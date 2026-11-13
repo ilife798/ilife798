@@ -1,7 +1,9 @@
 package com.github.ilife798.ui.page.tasks
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,8 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.TaskScheduler
 import com.github.ilife798.data.model.TaskSchedule
@@ -32,12 +36,12 @@ import com.github.ilife798.util.openBatteryOptimizationSettings
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.NumberPicker
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -142,41 +146,60 @@ fun TaskSchedulePage(
             SmallTitle(text = "重复", insideMargin = PaddingValues(4.dp, 8.dp, 4.dp, 0.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    TaskSchedule.WEEKDAY_NAMES.forEachIndexed { index, name ->
-                        val dayOfWeek = index + 1
-                        val checked = dayOfWeek in schedule.weekdays
-                        Row(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = supported) {
-                                        update { current ->
-                                            val next =
-                                                if (dayOfWeek in current.weekdays) {
-                                                    current.weekdays - dayOfWeek
-                                                } else {
-                                                    current.weekdays + dayOfWeek
-                                                }
-                                            current.copy(weekdays = next)
-                                        }
-                                    }.padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = name,
-                                style = MiuixTheme.textStyles.body1,
-                                color = MiuixTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Checkbox(
-                                state = if (checked) ToggleableState.On else ToggleableState.Off,
-                                onClick = null,
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TaskSchedule.WEEKDAY_SHORT_NAMES.forEachIndexed { index, shortName ->
+                            val dayOfWeek = index + 1
+                            WeekdayChip(
+                                label = shortName,
+                                selected = dayOfWeek in schedule.weekdays,
                                 enabled = supported,
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    update { current ->
+                                        val next =
+                                            if (dayOfWeek in current.weekdays) {
+                                                current.weekdays - dayOfWeek
+                                            } else {
+                                                current.weekdays + dayOfWeek
+                                            }
+                                        current.copy(weekdays = next)
+                                    }
+                                },
                             )
                         }
                     }
                     Text(
                         text = "全部未选等同于每天执行。",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
+                    )
+                }
+            }
+
+            // 到点后是拉起应用执行，还是留在后台静默跑完
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    OverlayDropdownPreference(
+                        title = "运行方式",
+                        items = TaskSchedule.RUN_MODES,
+                        selectedIndex = if (schedule.runInBackground) 1 else 0,
+                        enabled = supported,
+                        onSelectedIndexChange = { index ->
+                            update { it.copy(runInBackground = index == 1) }
+                        },
+                    )
+                    Text(
+                        text =
+                            if (schedule.runInBackground) {
+                                "到点后在后台静默执行，不会打断你正在做的事；系统可能因省电策略延后或限制执行。"
+                            } else {
+                                "到点后打开应用并执行，执行过程与手动按下「运行选中账号」完全一致。"
+                            },
                         style = MiuixTheme.textStyles.body2,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
@@ -208,6 +231,43 @@ fun TaskSchedulePage(
 
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+private fun WeekdayChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val background =
+        when {
+            selected -> MiuixTheme.colorScheme.primary
+            else -> MiuixTheme.colorScheme.surfaceContainerHigh
+        }
+    val contentColor =
+        when {
+            selected -> MiuixTheme.colorScheme.onPrimary
+            else -> MiuixTheme.colorScheme.onSurface
+        }
+    Box(
+        modifier =
+            modifier
+                .clip(CircleShape)
+                .background(background, CircleShape)
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.body1,
+            color = contentColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
