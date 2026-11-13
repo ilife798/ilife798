@@ -142,10 +142,18 @@
 
         <!-- 定时任务：闹钟到点有两个落点，
              ① 前台运行 → Activity 型 PendingIntent 直接拉起本应用，不经过接收器；
-             ② 后台运行 → 广播型 PendingIntent 到这里，再交给 WorkManager 调度执行 -->
+             ② 后台运行 → 广播型 PendingIntent 到这里，先尝试拉起下面这个前台服务，
+                被系统拒绝时再降级交给 WorkManager 调度执行 -->
         <receiver
             android:name=".TaskAlarmReceiver"
             android:exported="false" />
+
+        <!-- 定时任务后台运行的执行者：前台服务的进程优先级高，国产 ROM 的冻结器不会动它，
+             闹钟一到就能真正跑起来；不导出，只能由本应用的闹钟广播唤起 -->
+        <service
+            android:name=".ScheduledTaskService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 开机与升级后重排闹钟：系统广播的发送方是系统进程，必须导出；
              两个 action 都是受保护广播，外部应用无法伪造 -->

@@ -21,4 +21,16 @@ expect object TaskScheduler {
 
     /** 「下次执行」的可读描述，平台不支持或未启用时返回 null。 */
     fun describeNextRun(schedule: TaskSchedule): String?
+
+    /**
+     * 是否已获得「精确闹钟」权限。
+     *
+     * Android 14 起该权限默认不授予，未授予时只能退化成窗口闹钟：设备沉睡（Doze）期间
+     * 触发会被推迟到下一次维护窗口，可能晚很久。拿不到权限就只能引导用户手动开启，
+     * 所以这里把状态暴露给界面。不涉及该概念的平台恒为 true。
+     */
+    val exactAlarmGranted: Boolean
+
+    /** 打开系统的「精确闹钟」授权页面；平台不符或无此页面时不作处理。 */
+    fun openExactAlarmSettings()
 }

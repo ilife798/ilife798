@@ -14,4 +14,9 @@ actual object TaskScheduler {
     actual fun cancel() = Unit
 
     actual fun describeNextRun(schedule: TaskSchedule): String? = null
+
+    /** iOS 没有「精确闹钟权限」这一概念，恒 true 避免展示误导性的引导。 */
+    actual val exactAlarmGranted: Boolean = true
+
+    actual fun openExactAlarmSettings() = Unit
 }

@@ -217,6 +217,11 @@ fun TaskSchedulePage(
                 )
             }
 
+            if (supported && !TaskScheduler.exactAlarmGranted) {
+                Spacer(Modifier.height(4.dp))
+                ExactAlarmCard()
+            }
+
             if (supported && !isIgnoringBatteryOptimizations()) {
                 Spacer(Modifier.height(4.dp))
                 BatteryCard()
@@ -280,6 +285,33 @@ private fun UnsupportedCard() {
             color = MiuixTheme.colorScheme.error,
             modifier = Modifier.padding(16.dp),
         )
+    }
+}
+
+@Composable
+private fun ExactAlarmCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { TaskScheduler.openExactAlarmSettings() },
+        colors =
+            CardDefaults.defaultColors(
+                color = MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                contentColor = MiuixTheme.colorScheme.onSurface,
+            ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "开启「闹钟和提醒」权限",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "未开启时系统会把执行推迟到省电时段的空档，可能晚上数小时。点击前往授权。",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
     }
 }
 

@@ -1,52 +1,55 @@
 package com.github.ilife798
 
-import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import com.github.ilife798.data.api.ApiConfig
-import com.github.ilife798.data.api.DeviceWidgetSession
-import com.github.ilife798.data.viewmodel.BackgroundAccountResult
-import com.github.ilife798.data.viewmodel.TaskBackgroundRunner
-import com.github.ilife798.util.currentTimeMillis
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.github.ilife798.data.model.TaskProgress
+import kotlinx.coroutines.CancellationException
 
 /**
- * 定时任务「后台运行」的执行体。
+ * 定时任务「后台运行」的降级通道。
  *
- * 到点后由 [TaskAlarmReceiver] 排进 WorkManager，由系统在后台调度执行，
- * **不拉起界面、不切号**：直接对每个已登录账号用它自己的 token 发请求，
- * 因此不会打断用户正在做的事。
+ * 正常路径是闹钟广播 -> [TaskAlarmReceiver] 直接拉起 [ScheduledTaskService]（前台服务，进程不易被冻结）。
+ * 只有系统拒绝后台启动前台服务时（Android 12+ 的 `ForegroundServiceStartNotAllowedException`，
+ * 常见于没有精确闹钟权限的机型），才会排到这里，由 WorkManager 负责调度。
  *
- * 用 expedited 请求 + [setForeground] 让系统把它当作前台服务级别的任务对待，
- * 否则长任务在后台容易被省电策略掐断。
+ * 执行逻辑与前台服务共用 [ScheduledTaskRunner]，本类只负责 WorkManager 特有的部分：
+ * 前台信息声明、通知刷新、结果通知。通知 id 与正文都与手动运行共用同一套。
  */
 class TaskBackgroundWorker(
     context: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(context, params) {
+    private var lastProgress: TaskProgress? = null
+    private var lastLabel: String? = null
+
     override suspend fun doWork(): Result {
+        logDebug("ILife798", "TaskBackgroundWorker: 开始执行 attempt=$runAttemptCount")
         ScheduledTasks.bind(applicationContext)
         val schedule = ScheduledTasks.currentSchedule()
         if (!schedule.enabled || !schedule.runInBackground) {
             // 计划已关闭或已切回前台运行：本次触发作废
+            logDebug("ILife798", "TaskBackgroundWorker: 计划已失效，跳过")
             return Result.success()
         }
-        if (ApiConfig.baseUrl.isBlank()) {
-            ApiConfig.init(
-                BuildConfig.API_GATEWAY,
-                BuildConfig.SIGN_SALT,
-                BuildConfig.API_CID,
-                miniSalt = BuildConfig.MINI_SIGN_SALT,
-            )
-        }
         return try {
-            setForeground(foregroundInfo(INITIAL_TEXT))
-            runTasks()
+            // expedited 给了约 10 秒的临时前台服务许可窗口，要尽早转前台；
+            // 万一系统拒绝（配额、机型差异），也不能让整轮任务因此中止，故只记录不抛出。
+            runCatching { setForeground(foregroundInfo(TaskProgress(), null)) }
+                .onFailure { logDebug("ILife798", "TaskBackgroundWorker.setForeground: ${it.message}") }
+            val outcome = ScheduledTaskRunner.run(applicationContext, ::updateProgress)
+            notifyResult(
+                if (outcome.skippedReason != null) "定时任务已跳过" else "定时任务已完成",
+                outcome.summary(),
+            )
             Result.success()
+        } catch (e: CancellationException) {
+            // 用户主动停止：正常收尾，不再报「执行失败」
+            logDebug("ILife798", "TaskBackgroundWorker: 已被停止")
+            notifyResult("定时任务已停止", "本轮执行被手动停止")
+            throw e
         } catch (e: Exception) {
             logDebug("ILife798", "TaskBackgroundWorker: ${e.stackTraceToString()}")
             notifyResult("定时任务执行失败", e.message ?: "未知错误")
@@ -54,53 +57,32 @@ class TaskBackgroundWorker(
         }
     }
 
-    private suspend fun runTasks() {
-        val accounts =
-            withContext(Dispatchers.IO) {
-                DeviceWidgetSession.accounts(applicationContext)
-            }
-        if (accounts.isEmpty()) {
-            notifyResult("定时任务已跳过", "没有已登录的账号")
-            return
-        }
-        val session = DeviceWidgetSession()
-        try {
-            val runner = TaskBackgroundRunner(api = session.api) { logDebug("ILife798", it) }
-            runner.onAccountStart = { index, total, label ->
-                updateProgress("正在执行 $label（$index/$total）")
-            }
-            val results = withContext(Dispatchers.IO) { runner.runAll(accounts) }
-            notifyResult("定时任务已完成", summary(results))
-        } finally {
-            session.close()
-        }
-    }
-
-    private fun summary(results: List<BackgroundAccountResult>): String =
-        if (results.isEmpty()) {
-            "没有需要执行的账号"
-        } else {
-            results.joinToString("\n") { "${it.label} · ${it.message}" }
-        }
-
     /**
      * expedited 任务必须先声明为前台服务，否则系统会在 10 秒内把它当作后台任务掐掉。
-     * 这里复用积分任务的运行通知样式，用户看到的是同一套视觉。
+     * 通知与手动运行同样是两行正文：`积分:N`（多账号时前面带账号名）/ `任务名 (X/X)`。
      */
-    private fun foregroundInfo(text: String): ForegroundInfo {
+    private fun foregroundInfo(
+        progress: TaskProgress,
+        accountLabel: String?,
+    ): ForegroundInfo {
         ScheduledTaskNotifications.ensureChannel(applicationContext)
-        val notification = ScheduledTaskNotifications.runningNotification(applicationContext, text)
+        val notification =
+            ScheduledTaskNotifications.progressNotification(applicationContext, progress, accountLabel)
         return ForegroundInfo(SCHEDULED_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
-    private fun updateProgress(text: String) {
-        if (text == lastText) return
-        lastText = text
+    private fun updateProgress(
+        progress: TaskProgress,
+        accountLabel: String?,
+    ) {
+        if (progress == lastProgress && accountLabel == lastLabel) return
+        lastProgress = progress
+        lastLabel = accountLabel
         runCatching {
-            val manager = applicationContext.getSystemService(NotificationManager::class.java) ?: return
+            val manager = applicationContext.getSystemService(android.app.NotificationManager::class.java) ?: return
             manager.notify(
                 SCHEDULED_NOTIFICATION_ID,
-                ScheduledTaskNotifications.runningNotification(applicationContext, text),
+                ScheduledTaskNotifications.progressNotification(applicationContext, progress, accountLabel),
             )
         }
     }
@@ -113,7 +95,7 @@ class TaskBackgroundWorker(
             return
         }
         runCatching {
-            val manager = applicationContext.getSystemService(NotificationManager::class.java) ?: return
+            val manager = applicationContext.getSystemService(android.app.NotificationManager::class.java) ?: return
             manager.notify(
                 RESULT_NOTIFICATION_ID,
                 ScheduledTaskNotifications.resultNotification(applicationContext, title, text),
@@ -121,11 +103,8 @@ class TaskBackgroundWorker(
         }
     }
 
-    private var lastText: String = ""
-
     companion object {
-        private const val SCHEDULED_NOTIFICATION_ID = 2002
-        private const val RESULT_NOTIFICATION_ID = 2003
-        private const val INITIAL_TEXT = "正在后台执行各账号的积分任务"
+        private const val SCHEDULED_NOTIFICATION_ID = ScheduledTaskNotifications.RUNNING_ID
+        private const val RESULT_NOTIFICATION_ID = ScheduledTaskNotifications.RESULT_ID
     }
 }

@@ -4,8 +4,10 @@ import com.github.ilife798.data.api.CODE_RATE_LIMITED
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.api.PointsQueryException
 import com.github.ilife798.data.model.Account
+import com.github.ilife798.data.model.AccountEntry
 import com.github.ilife798.data.model.MissionInfo
 import com.github.ilife798.data.model.PointsInfo
+import com.github.ilife798.data.model.TaskProgress
 import com.github.ilife798.util.currentTimeMillis
 import com.github.ilife798.util.getDayOfWeek
 import kotlinx.coroutines.CancellationException
@@ -30,6 +32,9 @@ data class BackgroundAccountResult(
  * 代价是逻辑与 [TaskController] 有一份并行实现：界面路径绑定 AppState 与 isLoading，
  * 后台路径必须能在应用进程被闹钟唤起、UI 尚未建立时独立工作。取舍是保留两条路径，
  * 而不是给既有的 608 行 UI 关键路径加分支。
+ *
+ * 进度通过 [onProgress] 以结构化形式上报（而不是拼好的字符串），这样后台运行与手动运行
+ * 能渲染出完全相同的通知正文：「账号名 | 积分:N」+「任务名 (X/X)」。
  */
 class TaskBackgroundRunner(
     private val api: IlifeApi,
@@ -37,19 +42,27 @@ class TaskBackgroundRunner(
 ) {
     private val rateLimiter = TokenRateLimiter()
 
-    /** 供进度展示：当前第几个账号、共几个、账号名。 */
+    /**
+     * 进度回调：第一个参数是当前账号的进度快照，第二个参数是该账号的显示名
+     * （多账号运行时用于在正文里加前缀，单账号传 null 即可）。
+     */
+    var onProgress: ((TaskProgress, String?) -> Unit)? = null
+
+    /** 供日志展示：当前第几个账号、共几个、账号名。 */
     var onAccountStart: ((index: Int, total: Int, label: String) -> Unit)? = null
 
-    suspend fun runAll(accounts: List<Account>): List<BackgroundAccountResult> {
-        val targets = accounts.filter { it.hasAnyToken && it.uid.isNotEmpty() }
+    suspend fun runAll(entries: List<AccountEntry>): List<BackgroundAccountResult> {
+        val targets = entries.filter { it.account.hasAnyToken && it.account.uid.isNotEmpty() }
         val results = mutableListOf<BackgroundAccountResult>()
-        targets.forEachIndexed { index, account ->
-            val label = labelOf(account)
+        // 只有一个账号时不加前缀：与手动单账号运行的正文完全一致
+        val showLabel = targets.size > 1
+        targets.forEachIndexed { index, entry ->
+            val label = labelOf(entry)
             onAccountStart?.invoke(index + 1, targets.size, label)
             onLog("开始执行 $label")
             results +=
                 try {
-                    runAccount(account, label)
+                    runAccount(entry.account, label, showLabel)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -63,17 +76,23 @@ class TaskBackgroundRunner(
     private suspend fun runAccount(
         account: Account,
         label: String,
+        showLabel: Boolean,
     ): BackgroundAccountResult {
         rateLimiter.clear()
+        val prefix = label.takeIf { showLabel }
+        var gained = 0
+
+        fun emit(progress: TaskProgress) = onProgress?.invoke(progress, prefix)
+
+        emit(TaskProgress(gained = 0))
         val missionList = fetchMergedMissions(account)
         val before = pointsOrNull(account)
         if (before?.total == null) {
             onLog("$label 本轮开始时没有积分基准，无法核验增量")
         }
-        var gained = 0
         var queryFailed = before?.total == null
 
-        runDailySignin(account, missionList, label)?.let { gained += it }
+        runDailySignin(account, missionList, label, prefix)?.let { gained += it }
 
         val tokens = setOf(account.token, account.appToken).filter { it.isNotEmpty() }.toSet()
         val validMissions =
@@ -92,12 +111,17 @@ class TaskBackgroundRunner(
         }
 
         for (mission in validMissions) {
-            gained += runMission(account, mission, label)
+            gained +=
+                runMission(account, mission, label) { round, maxCount ->
+                    emit(TaskProgress(gained, mission.name, round, maxCount))
+                }
         }
 
         val delta = verifyDelta(account, before, gained)
         if (delta == null) queryFailed = true
         val verifiedPoints = delta ?: gained
+        // 收尾时把核验到的最终积分写回通知，数字与结果文案保持一致
+        emit(TaskProgress(gained = verifiedPoints))
         val message =
             when {
                 validMissions.isEmpty() && verifiedPoints == 0 -> "没有可执行任务"
@@ -127,9 +151,15 @@ class TaskBackgroundRunner(
         for (token in tokens) {
             val isApp = token == appToken
             val result =
-                runCatching { api.getMissionList(token, isApp) }
-                    .onFailure { onLog("读取任务进度失败：${it.message}") }
-                    .getOrNull() ?: continue
+                try {
+                    api.getMissionList(token, isApp)
+                } catch (e: CancellationException) {
+                    // 取消信号必须原样抛出：被 runCatching 吞掉会让「停止」变成继续执行到出错
+                    throw e
+                } catch (e: Exception) {
+                    onLog("读取任务进度失败：${e.message}")
+                    continue
+                }
             loadedChannels++
             weekMask = weekMask or result.weekMask
             if (result.dailyAdId.isNotEmpty() && dailyToken.isEmpty()) {
@@ -178,6 +208,7 @@ class TaskBackgroundRunner(
         account: Account,
         merged: MergedMissions,
         label: String,
+        prefix: String?,
     ): Int? {
         if (merged.dailyAdId.isBlank() || merged.dailyToken.isEmpty()) return null
         val weekDay = getDayOfWeek()
@@ -185,16 +216,20 @@ class TaskBackgroundRunner(
             onLog("$label 每日签到：今日已签到")
             return null
         }
+        onProgress?.invoke(TaskProgress(0, SIGNIN_LABEL, 1, 1), prefix)
         val signToken = merged.dailyToken
         val isApp = signToken == account.appToken
         repeat(RATE_LIMIT_RETRIES) { attempt ->
             val wait = rateLimiter.reserveDelay(signToken, currentTimeMillis())
             if (wait > 0) delay(wait.milliseconds)
             val result =
-                runCatching {
+                try {
                     api.signIn(signToken, account.uid, weekDay, merged.dailyAdId, merged.dailyScore, isApp)
-                }.getOrElse {
-                    onLog("$label 签到异常：${it.message}")
+                } catch (e: CancellationException) {
+                    // 用户按下「停止」时抛出的取消必须一路传上去，否则会被当成普通异常吞掉
+                    throw e
+                } catch (e: Exception) {
+                    onLog("$label 签到异常：${e.message}")
                     return null
                 }
             if (result.success) {
@@ -214,6 +249,7 @@ class TaskBackgroundRunner(
         account: Account,
         mission: MissionInfo,
         label: String,
+        onRound: (round: Int, maxCount: Int) -> Unit,
     ): Int {
         val maxCount = mission.limit
         if (mission.dailyCompleted >= maxCount) {
@@ -226,21 +262,31 @@ class TaskBackgroundRunner(
         while (round < maxCount) {
             round++
             onLog("$label ${mission.name} ($round/$maxCount) 执行中…")
+            onRound(round, maxCount)
             // 与界面路径一致：每个任务之间留出间隔，避免连续请求触发频控
             delay(MISSION_INTERVAL_MS.milliseconds)
             val wait = rateLimiter.reserveDelay(execToken, currentTimeMillis())
             if (wait > 0) delay(wait.milliseconds)
             var result =
-                runCatching { api.executeMission(execToken, account.uid, mission.adId, mission.score, isApp) }
-                    .getOrElse {
-                        onLog("$label ${mission.name} 请求结果不明确，停止本轮")
-                        return 0
-                    }
+                try {
+                    api.executeMission(execToken, account.uid, mission.adId, mission.score, isApp)
+                } catch (e: CancellationException) {
+                    // 取消要原样抛出：被吞掉会让「停止」变成一句莫名其妙的失败提示
+                    throw e
+                } catch (e: Exception) {
+                    onLog("$label ${mission.name} 请求结果不明确，停止本轮")
+                    return 0
+                }
             if (!result.success && result.code == CODE_RATE_LIMITED) {
                 delay(RATE_LIMIT_BACKOFF_MS.milliseconds)
                 result =
-                    runCatching { api.executeMission(execToken, account.uid, mission.adId, mission.score, isApp) }
-                        .getOrElse { return 0 }
+                    try {
+                        api.executeMission(execToken, account.uid, mission.adId, mission.score, isApp)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        return 0
+                    }
             }
             if (!result.success) {
                 if (result.code == CODE_RATE_LIMITED) {
@@ -297,7 +343,17 @@ class TaskBackgroundRunner(
         return null
     }
 
-    private fun labelOf(account: Account): String = account.phone.ifBlank { account.uid }.ifBlank { "账号" }
+    /**
+     * 账号显示名：优先昵称，其次手机号，最后 uid。
+     *
+     * 后台路径过去直接从 [Account] 取手机号，导致通知里显示的是号码而不是昵称；
+     * 昵称只在 [AccountEntry.info] 里，所以调用方必须把整条 [AccountEntry] 传进来。
+     */
+    private fun labelOf(entry: AccountEntry): String =
+        entry.info.name
+            .ifBlank {
+                entry.account.phone.ifBlank { entry.account.uid }
+            }.ifBlank { "账号" }
 
     private data class MergedMissions(
         val missions: List<MissionInfo>,
@@ -318,5 +374,6 @@ class TaskBackgroundRunner(
         private const val RATE_LIMIT_RETRIES = 2
         private const val POINTS_QUERY_ATTEMPTS = 2
         private const val POINTS_QUERY_RETRY_DELAY_MS = 5_000L
+        private const val SIGNIN_LABEL = "每日签到"
     }
 }

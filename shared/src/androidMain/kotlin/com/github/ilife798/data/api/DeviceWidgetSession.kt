@@ -26,6 +26,14 @@ class DeviceWidgetSession {
         /** 已登录且持有 token 的账号；后台任务（桌面组件、定时任务）都按这份列表执行。 */
         fun accounts(context: Context): List<Account> = entries(context).map { it.account }.filter { it.hasAnyToken }
 
+        /**
+         * 同上，但连同缓存资料一起返回。
+         *
+         * 后台通知要显示账号昵称，而昵称只在 [AccountEntry.info] 里（[Account] 本身没有昵称字段），
+         * 所以定时任务这条链路必须拿整条条目。
+         */
+        fun accountEntries(context: Context): List<AccountEntry> = entries(context).filter { it.account.hasAnyToken }
+
         fun account(
             context: Context,
             key: String,

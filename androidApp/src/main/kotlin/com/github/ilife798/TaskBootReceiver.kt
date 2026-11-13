@@ -48,6 +48,16 @@ internal object ScheduledTasks {
 
     fun scheduleNext() {
         val schedule = currentSchedule()
-        if (schedule.enabled) TaskScheduler.reschedule(schedule) else TaskScheduler.cancel()
+        if (schedule.enabled) {
+            TaskScheduler.reschedule(schedule)
+            logDebug(
+                "ILife798",
+                "ScheduledTasks: 已重排 enabled=${schedule.enabled} mode=${schedule.runModeText} " +
+                    "next=${TaskScheduler.describeNextRun(schedule)}",
+            )
+        } else {
+            TaskScheduler.cancel()
+            logDebug("ILife798", "ScheduledTasks: 计划未启用，已取消所有调度")
+        }
     }
 }

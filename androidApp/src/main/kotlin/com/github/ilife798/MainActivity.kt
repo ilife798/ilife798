@@ -117,7 +117,10 @@ class MainActivity : ComponentActivity() {
             }
 
             IntentActions.ACTION_STOP_TASKS -> {
+                // 停止按钮同时覆盖两条路径：界面里正在跑的任务，以及后台服务里的一轮
                 AppRequests.stopTasks.request()
+                runCatching { stopService(Intent(this, ScheduledTaskService::class.java)) }
+                    .onFailure { logDebug("ILife798", "MainActivity.stopTasks: ${it.message}") }
             }
         }
     }

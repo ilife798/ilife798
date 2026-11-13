@@ -5,6 +5,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
+import androidx.core.net.toUri
 import androidx.work.WorkManager
 import com.github.ilife798.data.model.TaskSchedule
 import com.github.ilife798.util.formatTimestamp
@@ -13,22 +15,28 @@ import java.util.Calendar
 /**
  * Android 侧的定时调度。
  *
- * 两种运行方式走两条完全不同的通道，因为系统对它们的限制不同：
+ * 两种运行方式走两条通道，闹钟到点后各自选最可靠的方式把活干完：
  * - **前台运行**：用 [PendingIntent.getActivity] 拉起 MainActivity，走 `AppRequests.runScheduledTasks`，
  *   与手动按下「运行选中账号」共用同一套切号与执行逻辑。Android 10+ 禁止后台启动 Activity，
  *   但由闹钟 PendingIntent 启动属于系统豁免路径，因此这条通道可用。
- * - **后台运行**：交给 WorkManager 的 expedited 一次性任务，由系统调度、用
- *   `TaskBackgroundWorker` 直接对每个账号发请求，不碰界面。Android 12+ 禁止后台启动前台服务，
- *   所以这里不走自建 Service；WorkManager 是系统认可的合法后台执行通道。
+ * - **后台运行**：闹钟发广播，`TaskAlarmReceiver` 先尝试拉起常驻前台服务 `ScheduledTaskService`
+ *   （前台服务的进程优先级高，ColorOS 的 fastfreezer 之类不会去冻它）；
+ *   若系统以 `ForegroundServiceStartNotAllowedException` 拒绝，再降级交给 WorkManager 的
+ *   expedited 一次性任务。两条路最终都调 `TaskBackgroundRunner`，不碰界面。
  *
- * 闹钟本身仍然是 AlarmManager：`setExactAndAllowWhileIdle` 能在 Doze 下唤醒设备，
- * 这是「到点必须跑」需要的行为，WorkManager 的周期性任务做不到准点。
+ * 闹钟本身仍是 AlarmManager，优先级从高到低：
+ * 1. `setAlarmClock`：完全豁免 Doze，代价是状态栏会显示闹钟图标，需要精确闹钟权限；
+ * 2. `setExactAndAllowWhileIdle`：Doze 下仍能唤醒，同样需要精确闹钟权限；
+ * 3. `setWindow`：没有权限时的兜底，会被推到下一个 maintenance window，可能晚很久。
  */
 actual object TaskScheduler {
     private const val REQUEST_CODE = 7301
 
     // 后台通道用独立的 PendingIntent 身份，避免与 Activity 型闹钟互相覆盖。
     private const val REQUEST_CODE_BACKGROUND = 7302
+
+    // setAlarmClock 的「点闹钟图标」入口，与真正的触发 PendingIntent 分开。
+    private const val REQUEST_CODE_SHOW = 7303
 
     /** 后台运行时闹钟发出的广播，由 `TaskAlarmReceiver` 接手并转交 WorkManager。 */
     const val ACTION_RUN_BACKGROUND_TASKS = "com.github.ilife798.action.RUN_BACKGROUND_TASKS"
@@ -43,19 +51,53 @@ actual object TaskScheduler {
 
     actual val supported: Boolean = true
 
+    /** Android 14 起该权限默认不授予，未授予时只能退化成窗口闹钟。 */
+    actual val exactAlarmGranted: Boolean
+        get() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+            val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return false
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+            return runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+        }
+
+    actual fun openExactAlarmSettings() {
+        val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
+        val packageUri = "package:${context.packageName}".toUri()
+        val intents =
+            listOf(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri),
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri),
+            )
+        for (intent in intents) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val started = runCatching { context.startActivity(intent) }.isSuccess
+            if (started) return
+        }
+        logDebug("ILife798", "TaskScheduler.openExactAlarmSettings: 无法打开授权页面")
+    }
+
     actual fun reschedule(schedule: TaskSchedule) {
         val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
         val normalized = schedule.normalized
-        // 两条通道互斥：先无条件清掉两条通道上的遗留调度，再按当前运行方式装新的。
-        // 只取消目标通道是不够的——用户从前台切到后台时，残留的 Activity 型闹钟仍会到点拉起界面；
-        // 反过来切回前台时，残留的广播型闹钟也会多触发一轮。
-        cancelWork(context)
+        // 只有「不再是后台运行」时才清空后台队列。
+        // 不无条件 cancelWork 的原因：应用每次启动都会经 loadSettings 调到这里，
+        // 若后台任务正在跑，无条件取消就等于用户一打开应用就把本轮任务掐断。
+        if (!normalized.enabled || !normalized.runInBackground) cancelWork(context)
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        // 两条通道的闹钟都要清掉：只取消目标通道时，切换运行方式会残留另一条，
+        // 表现为切到后台后仍被 Activity 型闹钟拉起界面，或切回前台后多触发一轮。
         alarmManager.cancel(pendingIntent(context, null))
         alarmManager.cancel(pendingIntent(context, TaskSchedule(runInBackground = true)))
         if (!normalized.enabled) return
         val triggerAt = nextTriggerAt(normalized, System.currentTimeMillis())
         setAlarm(alarmManager, triggerAt, pendingIntent(context, normalized))
+        // 精确闹钟被拒时系统会退回窗口闹钟，用户只表现为「到点没反应」，
+        // 这行日志把两件事一起记下来：走的是哪条通道、能不能申请到精确闹钟。
+        logDebug(
+            "ILife798",
+            "TaskScheduler.reschedule: mode=${normalized.runModeText} triggerAt=$triggerAt " +
+                "exact=${Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()}",
+        )
     }
 
     actual fun cancel() {
@@ -80,7 +122,15 @@ actual object TaskScheduler {
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
         runCatching {
             if (exact) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
+                // setAlarmClock 是唯一完全豁免 Doze 的形式，代价是状态栏常驻一个闹钟图标。
+                // 定时任务是「到点就得跑」的场景，值得用这个图标换准点。
+                val showIntent =
+                    pendingIntentShowIntent(pendingIntent)
+                if (showIntent != null) {
+                    alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAt, showIntent), pendingIntent)
+                } else {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
+                }
             } else {
                 // 未授予精确闹钟权限时退回窗口闹钟：仍会唤醒设备，只是触发时间可能推迟几分钟。
                 alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, INEXACT_WINDOW_MS, pendingIntent)
@@ -88,6 +138,39 @@ actual object TaskScheduler {
         }.onFailure {
             logDebug("ILife798", "TaskScheduler.setAlarm: ${it.message}")
         }
+    }
+
+    /**
+     * `setAlarmClock` 需要一个「点闹钟图标要打开哪」的 PendingIntent。
+     *
+     * 这里固定指向任务页，让用户点状态栏图标能直接看到定时任务的执行情况；
+     * 拿不到 Activity 型 PendingIntent 时返回 null，调用方退回 `setExactAndAllowWhileIdle`。
+     */
+    private fun pendingIntentShowIntent(operation: PendingIntent): PendingIntent? =
+        runCatching {
+            val context = ApplicationContext.instance
+            if (operation.isActivity) null else activityPendingIntentForShow(context)
+        }.getOrNull()
+
+    private fun activityPendingIntentForShow(context: Context): PendingIntent {
+        val intent =
+            (
+                context.packageManager.getLaunchIntentForPackage(context.packageName)
+                    ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)
+            ).apply {
+                action = IntentActions.ACTION_OPEN_TASKS
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP,
+                )
+            }
+        return PendingIntent.getActivity(
+            context,
+            REQUEST_CODE_SHOW,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     /**
