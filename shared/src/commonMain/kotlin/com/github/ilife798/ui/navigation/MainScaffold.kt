@@ -58,6 +58,7 @@ import com.github.ilife798.ui.page.login.TokenLoginPage
 import com.github.ilife798.ui.page.me.CardBagPage
 import com.github.ilife798.ui.page.me.MePage
 import com.github.ilife798.ui.page.score.ScorePage
+import com.github.ilife798.ui.page.tasks.TaskSchedulePage
 import com.github.ilife798.ui.page.tasks.TasksPage
 import com.github.ilife798.ui.theme.appBarBlur
 import com.github.ilife798.ui.theme.blurAppBarColor
@@ -303,6 +304,7 @@ private fun HomePagerPage(
                 onCardBagClick = { navigate(Page.CardBag) },
                 onLicenseClick = { navigate(Page.License) },
                 onBackupClick = { navigate(Page.Backup) },
+                onTaskScheduleClick = { navigate(Page.TaskSchedule) },
                 bottomPadding = bottomPadding,
                 wideScreen = wideScreen,
             )
@@ -656,6 +658,11 @@ fun MainScaffold(viewModel: AppViewModel) {
                         viewModel = viewModel,
                         onBack = onBack,
                     )
+                }
+            }
+            entry<Page.TaskSchedule>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    TaskSchedulePage(viewModel = viewModel, onBack = onBack)
                 }
             }
             entry<Page.Backup>(transition = detailTransition) {

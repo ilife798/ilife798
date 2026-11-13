@@ -96,6 +96,10 @@ class MainActivity : ComponentActivity() {
                 AppRequests.runTasks.request()
             }
 
+            IntentActions.ACTION_RUN_SCHEDULED_TASKS -> {
+                AppRequests.runScheduledTasks.request()
+            }
+
             IntentActions.ACTION_SHOW_UPDATE -> {
                 AppRequests.showUpdate.request()
             }

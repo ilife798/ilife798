@@ -7,6 +7,9 @@ object IntentActions {
     const val ACTION_OPEN_WIDGET_DEVICE = "com.github.ilife798.action.OPEN_WIDGET_DEVICE"
     const val EXTRA_WIDGET_ACCOUNT = "com.github.ilife798.extra.WIDGET_ACCOUNT"
     const val ACTION_RUN_TASKS = "com.github.ilife798.action.RUN_TASKS"
+
+    // 定时任务闹钟到点触发：与手动批量运行同一入口，不另起进程
+    const val ACTION_RUN_SCHEDULED_TASKS = "com.github.ilife798.action.RUN_SCHEDULED_TASKS"
     const val ACTION_SHOW_UPDATE = "com.github.ilife798.action.SHOW_UPDATE"
     const val ACTION_STOP_DEVICE = "com.github.ilife798.action.STOP_DEVICE"
     const val ACTION_OPEN_HOME = "com.github.ilife798.action.OPEN_HOME"

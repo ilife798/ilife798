@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import androidx.annotation.RequiresApi
+import com.github.ilife798.data.model.TaskProgress
 
 internal const val RUN_NOTIFICATION_GROUP = "com.github.ilife798.run"
 internal const val DEVICE_ID_BASE = 2201
@@ -35,7 +36,7 @@ internal fun buildDeviceNotification(
     val builder =
         Notification
             .Builder(context, CHANNEL_DEVICE)
-            .setSmallIcon(com.github.ilife798.shared.R.drawable.ic_notify_device)
+            .setSmallIcon(appIconRes(context))
             .setContentTitle("设备运行中")
             .setContentText("$label · 编号 $deviceId")
             .setContentIntent(
@@ -55,23 +56,24 @@ internal fun buildDeviceNotification(
     return builder.build()
 }
 
+/**
+ * 积分任务运行通知。正文两行：
+ * - 单账号：`积分:12` / `任务名称 (1/3)`
+ * - 多账号：`账号名 | 积分:12` / `任务名称 (1/3)`
+ */
 internal fun buildTaskNotification(
     context: Context,
-    gained: Int,
+    progress: TaskProgress,
+    accountLabel: String?,
 ): Notification {
-    val stopIntent =
-        activityPendingIntent(
-            context,
-            REQUEST_STOP_TASKS,
-            IntentActions.ACTION_STOP_TASKS,
-            deviceId = null,
-        )
+    val lines = progress.bodyLines(accountLabel)
     val builder =
         Notification
             .Builder(context, CHANNEL_TASK)
-            .setSmallIcon(com.github.ilife798.shared.R.drawable.ic_notify_task)
+            .setSmallIcon(appIconRes(context))
             .setContentTitle("积分任务运行中")
-            .setContentText("已获得 $gained 积分")
+            .setContentText(lines.firstOrNull().orEmpty())
+            .setStyle(Notification.BigTextStyle().bigText(lines.joinToString("\n")))
             .setContentIntent(
                 activityPendingIntent(
                     context,
@@ -84,15 +86,21 @@ internal fun buildTaskNotification(
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setOngoing(true)
-            .addAction(
-                Notification.Action
-                    .Builder(
-                        Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
-                        "停止",
-                        stopIntent,
-                    ).build(),
-            )
-    applyRunProgress(builder)
+    // 停止按钮与任务页的停止按钮等价：都走 ACTION_STOP_TASKS → AppRequests.stopTasks
+    builder.addAction(
+        stopAction(
+            context,
+            activityPendingIntent(
+                context,
+                REQUEST_STOP_TASKS,
+                IntentActions.ACTION_STOP_TASKS,
+                deviceId = null,
+            ),
+        ),
+    )
+    // 这里不用 ProgressStyle：它会整体替换 notification.style，把上面的 BigTextStyle 顶掉，
+    // 第二行「任务名 (轮次/总数)」就不再展开。改回普通进度条，两行正文与进度可以并存。
+    builder.setProgress(0, 0, true)
     return builder.build()
 }
 
@@ -110,13 +118,19 @@ private fun stopDeviceAction(
             IntentActions.ACTION_STOP_DEVICE,
             deviceId,
         )
-    return Notification.Action
+    return stopAction(context, pendingIntent)
+}
+
+private fun stopAction(
+    context: Context,
+    pendingIntent: PendingIntent,
+): Notification.Action =
+    Notification.Action
         .Builder(
             Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
             "停止",
             pendingIntent,
         ).build()
-}
 
 private fun applyRunProgress(builder: Notification.Builder) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
@@ -139,6 +153,17 @@ private fun applyProgressStyle(builder: Notification.Builder) {
     if (Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.BAKLAVA_1) {
         builder.setRequestPromotedOngoing(true)
     }
+}
+
+// 通知小图标统一使用应用图标：状态栏只取 alpha 通道，颜色由系统着色。
+// 优先取启动图标的矢量前景（androidApp 的 ic_launcher_foreground），
+// 拿不到时退回 applicationInfo.icon，保证不会因为资源缺失而崩溃。
+private fun appIconRes(context: Context): Int {
+    val foreground =
+        context.resources.getIdentifier("ic_launcher_foreground", "drawable", context.packageName)
+    if (foreground != 0) return foreground
+    val icon = context.applicationInfo.icon
+    return if (icon != 0) icon else android.R.drawable.stat_notify_sync
 }
 
 private fun activityPendingIntent(

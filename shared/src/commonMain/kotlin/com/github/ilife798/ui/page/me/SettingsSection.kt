@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.AppRepository
 import com.github.ilife798.data.model.PaletteStyle
+import com.github.ilife798.data.model.TaskSchedule
 import com.github.ilife798.data.model.ThemeMode
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.getAppVersion
@@ -55,6 +56,7 @@ internal fun SettingsSection(
     viewModel: AppViewModel,
     onLicenseClick: () -> Unit,
     onBackupClick: () -> Unit,
+    onTaskScheduleClick: () -> Unit,
     wideScreen: Boolean,
 ) {
     val state = viewModel.state
@@ -183,6 +185,16 @@ internal fun SettingsSection(
                 title = "加速地址",
                 summary = viewModel.githubProxyUrl.ifBlank { "设置 GitHub 加速地址" },
                 onClick = { showGithubProxyDialog = true },
+            )
+        }
+    }
+    SmallTitle(text = "自动化", insideMargin = PaddingValues(16.dp, 8.dp, 16.dp, 0.dp))
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            ArrowPreference(
+                title = "定时任务",
+                summary = taskScheduleSummary(state.taskSchedule),
+                onClick = onTaskScheduleClick,
             )
         }
     }
@@ -354,6 +366,10 @@ private fun PresetColorGrid(
         }
     }
 }
+
+/** 「定时任务」入口的摘要文案，与定时任务页顶部保持一致。 */
+private fun taskScheduleSummary(schedule: TaskSchedule): String =
+    if (schedule.enabled) "${schedule.timeText} · ${schedule.weekdayText}" else "未启用"
 
 /**
  * 「清空设备自定义信息」在两次弹窗之间暂存的待删除项。

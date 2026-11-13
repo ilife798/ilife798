@@ -11,6 +11,7 @@ import com.github.ilife798.data.model.Account
 import com.github.ilife798.data.model.AppState
 import com.github.ilife798.data.model.MissionInfo
 import com.github.ilife798.data.model.PointsInfo
+import com.github.ilife798.data.model.TaskProgress
 import com.github.ilife798.update.requestNotificationPermission
 import com.github.ilife798.util.currentTimeFormatted
 import com.github.ilife798.util.currentTimeMillis
@@ -50,6 +51,39 @@ class TaskController(
 
     private var taskJob: Job? = null
     private var lastMissionsLoadTime = 0L
+
+    // 通知当前展示的进度：已核验积分 + 正在执行的任务与轮次
+    private var taskGained = 0
+    private var taskMissionName = ""
+    private var taskRound = 0
+    private var taskTotal = 0
+
+    private fun publishTaskProgress() {
+        RunNotifications.updateTask(
+            TaskProgress(
+                gained = taskGained,
+                missionName = taskMissionName,
+                round = taskRound,
+                total = taskTotal,
+            ),
+        )
+    }
+
+    private fun publishMission(
+        name: String,
+        round: Int,
+        total: Int,
+    ) {
+        taskMissionName = name
+        taskRound = round
+        taskTotal = total
+        publishTaskProgress()
+    }
+
+    private fun publishGained(gained: Int) {
+        taskGained = gained
+        publishTaskProgress()
+    }
 
     fun reset() {
         taskJob?.cancel()
@@ -136,7 +170,7 @@ class TaskController(
             earnings.verified = delta
             earnings.queryFailed = false
             setState { it.copy(points = points) }
-            RunNotifications.updateTask(delta)
+            publishGained(delta)
             addTaskLog("到账核验：本轮期间累计积分增加 $delta 分（包含其他渠道入账）")
         } catch (e: CancellationException) {
             throw e
@@ -334,13 +368,32 @@ class TaskController(
         }
     }
 
-    fun runAll() {
-        if (getState().taskCompleted || getLoading()) return
+    /**
+     * 批量执行（任务页「运行选中账号」、定时任务）的入口。
+     *
+     * 与直接调 [runAll] 的差别只有两点，都是为了不让某个账号被静默跳过：
+     * - 不看 `taskCompleted`：批量由调度器逐个账号排程，是否已完成交给服务端在任务列表里判定，
+     *   本地这份完成态可能是页面加载时的旧快照（第一个账号往往就是当前账号，不切号就不会被重置）。
+     * - 没有任务在跑却残留 `isLoading` 时先清掉：上一轮若在切号之后被停止，
+     *   `onLoadingChange(false)` 不会执行，光靠 [runAll] 的守卫会一直返回。
+     */
+    fun runForBatch(): Boolean {
+        if (!isRunning) onLoadingChange(false)
+        return runAll(ignoreCompleted = true)
+    }
+
+    private val isRunning: Boolean
+        get() = taskJob?.isActive == true
+
+    /** @return 是否真的启动了执行；被前置条件挡下时返回 false，批量调度据此判断无需等待。 */
+    fun runAll(ignoreCompleted: Boolean = false): Boolean {
+        if (getLoading()) return false
+        if (!ignoreCompleted && getState().taskCompleted) return false
         val uid = getState().account.uid
         val account = getState().account
         if ((account.appToken.isEmpty() && account.token.isEmpty()) || uid.isEmpty()) {
             onError("需要积分登录才能执行任务")
-            return
+            return false
         }
         val startApp = account.appToken
         val startPoints = account.token
@@ -348,15 +401,21 @@ class TaskController(
         lastMissionsLoadTime = 0L
         onResetScoreCooldown()
         onToast("开始运行积分任务")
+        // 同步置为「运行中」：批量调度会在 runTasks() 返回后立刻查 isLoading，
+        // 若等到协程内部才置位，它会误判成没在跑，提前切号并取消刚启动的这一轮。
+        onLoadingChange(true)
         taskJob =
             scope.launch {
-                onLoadingChange(true)
                 onError(null)
                 setState { it.copy(taskLogs = emptyList()) }
                 rateLimiter.clear()
                 // 等通知权限弹窗关闭（无论是否授权）后再开始，保证实时动态/前台服务通知能正常展示
                 requestNotificationPermission()
-                RunNotifications.updateTask(0)
+                taskGained = 0
+                taskMissionName = ""
+                taskRound = 0
+                taskTotal = 0
+                publishTaskProgress()
                 var runEarnings: Earnings? = null
                 try {
                     addTaskLog("正在加载任务列表...")
@@ -447,6 +506,7 @@ class TaskController(
                     if (taskJob === currentCoroutineContext()[Job]) taskJob = null
                 }
             }
+        return true
     }
 
     /**
@@ -471,6 +531,7 @@ class TaskController(
             addTaskLog("等待 ${wait / 1000} 秒...")
             delay(wait.milliseconds)
         }
+        publishMission(SIGNIN_LABEL, 1, 1)
         addTaskLog("每日签到: 执行中...")
         val signResult = api.signIn(signToken, uid, weekDay, merged.dailyAdId, merged.dailyScore, signToken == earnings.account.appToken)
         if (signResult.success) {
@@ -541,6 +602,7 @@ class TaskController(
         val maxCount = mission.limit
         for (round in (mission.dailyCompleted + 1)..maxCount) {
             if (!currentCoroutineContext().isActive) break
+            publishMission(mission.name, round, maxCount)
             addTaskLog("[${mission.name}] ($round/$maxCount) 执行中...")
             delay(30.seconds)
             var execResult = api.executeMission(execToken, uid, mission.adId, mission.score, execToken == earnings.account.appToken)
@@ -604,5 +666,8 @@ class TaskController(
         // 积分汇总查询：-98 频控时的重试次数与退避间隔（issue #5）
         const val POINTS_QUERY_ATTEMPTS = 2
         const val POINTS_QUERY_RETRY_DELAY_MS = 5_000L
+
+        // 运行通知第二行展示的签到任务名（与任务列表里的「每日签到」一致）
+        const val SIGNIN_LABEL = "每日签到"
     }
 }

@@ -16,7 +16,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,9 +38,7 @@ import com.github.ilife798.util.formatMoney
 import com.github.ilife798.util.getDayOfWeek
 import com.github.ilife798.util.isIgnoringBatteryOptimizations
 import com.github.ilife798.util.openBatteryOptimizationSettings
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonColors
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -68,11 +65,9 @@ fun TasksPage(
     val state = viewModel.state
     val missions = viewModel.missions
     val isLoading = viewModel.isLoading
-    // 多账号批量运行：勾选账号后依次切号执行，跑完恢复原账号
-    val batchScope = rememberCoroutineScope()
-    var batching by remember { mutableStateOf(false) }
-    // 批量协程句柄，用于「停止」时整批中断
-    var batchJob by remember { mutableStateOf<Job?>(null) }
+    // 多账号批量运行：勾选账号后依次切号执行，跑完恢复原账号。
+    // 具体流程在 TaskBatchController 里，定时任务走的是同一份实现。
+    val batching = viewModel.batching
     val accountRows = viewModel.state.accountList
     var selectedAccounts by remember(accountRows.size) {
         mutableStateOf(accountRows.indices.filter { accountRows[it].account.hasAnyToken }.toSet())
@@ -86,13 +81,6 @@ fun TasksPage(
             ?.account
             ?.uid
             .orEmpty()
-
-    fun indexOfUid(uid: String): Int =
-        if (uid.isEmpty()) {
-            -1
-        } else {
-            viewModel.state.accountList.indexOfFirst { it.account.uid == uid }
-        }
     // 各账号积分直接读设备控制器里的资产快照，与「首页 - 设备详情 - 账号」同一份数据源；
     // 只在内存里，切号或重启后由下面的批量拉取重新获取。
     val scrollBehavior = MiuixScrollBehavior()
@@ -144,7 +132,8 @@ fun TasksPage(
                     Button(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
-                            if (isLoading) showStopDialog = true else viewModel.runAllTasks()
+                            // 单账号运行：通知正文不带账号前缀
+                            if (isLoading) showStopDialog = true else viewModel.runSingleAccountTasks()
                         },
                         enabled = isLoading || (isLoggedIn && !state.taskCompleted),
                         colors = ButtonDefaults.buttonColors(),
@@ -272,61 +261,17 @@ fun TasksPage(
                             Button(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
-                                    if (isLoading) {
+                                    // 运行中（含批量切号的间隙）点击都是「停止」，
+                                    // 不能只判 isLoading：批量在两个账号之间时它短暂为 false
+                                    if (isLoading || batching) {
                                         showStopDialog = true
                                         return@Button
                                     }
-                                    if (batching) return@Button
-                                    // 按账号顺序拍下 (uid, 原下标) 快照，后续一律用 uid 定位。
-                                    // uid 异常为空时退回原下标，不至于被静默跳过。
-                                    val targets =
-                                        selectedAccounts
-                                            .sorted()
-                                            .map { index -> uidOf(index) to index }
+                                    // 只把选中的 uid 交出去：切号、等待、刷新都在 TaskBatchController
+                                    // 里完成，定时任务调用的是同一份实现
+                                    val targets = selectedAccounts.sorted().map { index -> uidOf(index) }
                                     if (targets.isEmpty()) return@Button
-                                    batching = true
-                                    batchJob =
-                                        batchScope.launch {
-                                            val originUid = viewModel.state.account.uid
-                                            val originIndex = viewModel.state.currentAccountIndex
-                                            // 无论正常结束、异常还是被取消，都要把 batching 复位并切回原账号，
-                                            // 否则按钮会永久卡在「运行中，点击停止」再也点不动
-                                            try {
-                                                for ((uid, fallbackIndex) in targets) {
-                                                    // 每轮重新按 uid 反查下标：期间若删过账号，下标会整体偏移。
-                                                    // uid 为空时退回用快照里的原下标。
-                                                    val index = indexOfUid(uid).takeIf { it >= 0 } ?: fallbackIndex
-                                                    val entry = viewModel.state.accountList.getOrNull(index) ?: continue
-                                                    if (!entry.account.hasAnyToken) continue
-                                                    if (index != viewModel.state.currentAccountIndex) {
-                                                        viewModel.switchAccount(index)
-                                                        // 等切号后的数据重载完成再请求，避免用旧 token 发起任务
-                                                        delay(1_500)
-                                                    }
-                                                    viewModel.runAllTasks()
-                                                    // 等本轮结束：isLoading 由执行器驱动，最多等 10 分钟
-                                                    var waited = 0
-                                                    while (viewModel.isLoading && waited < 1_200) {
-                                                        delay(500)
-                                                        waited++
-                                                    }
-                                                    // 跑完一个账号就单独刷新它的积分，账号行立刻反映到账结果。
-                                                    // 只刷这一个账号，避免一次对全站发起大量 mission-lst 撞 -98。
-                                                    // 稍等再拉：让服务端的积分流水先落库。
-                                                    delay(1_000)
-                                                    val refreshIndex = indexOfUid(uid).takeIf { it >= 0 } ?: fallbackIndex
-                                                    viewModel.refreshAccountAssets(refreshIndex)
-                                                }
-                                            } finally {
-                                                // 同样按 uid 找回原账号，它若被删除则退回原下标，仍不存在就保持不动
-                                                val back = indexOfUid(originUid).takeIf { it >= 0 } ?: originIndex
-                                                if (back in viewModel.state.accountList.indices) {
-                                                    viewModel.switchAccount(back)
-                                                }
-                                                batching = false
-                                                batchJob = null
-                                            }
-                                        }
+                                    viewModel.startBatchTasks(targets)
                                 },
                                 enabled = batching || isLoading || selectedAccounts.isNotEmpty(),
                                 colors =
@@ -532,12 +477,9 @@ fun TasksPage(
             confirmText = "停止",
             destructive = true,
             onConfirm = {
+                // stopTasks 同时停掉当前账号这一轮与整批循环，
+                // 否则批量协程会在 isLoading 归 false 后继续切下一个账号接着刷
                 viewModel.stopTasks()
-                // 批量执行时「停止」的语义是整批停止：先取消批量协程，
-                // 否则它会在 isLoading 归 false 后继续切下一个账号接着刷
-                batchJob?.cancel()
-                batchJob = null
-                batching = false
                 showStopDialog = false
             },
             onDismiss = { showStopDialog = false },

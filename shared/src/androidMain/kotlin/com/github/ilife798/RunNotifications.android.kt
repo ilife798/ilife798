@@ -1,6 +1,7 @@
 package com.github.ilife798
 
 import android.app.NotificationManager
+import com.github.ilife798.data.model.TaskProgress
 
 // Android 端的运行通知实现。
 // 设备运行与积分任务运行通知在运行期间常驻展示，并直接作为前台服务通知（含实时动态），
@@ -12,7 +13,12 @@ actual object RunNotifications {
     )
 
     private val deviceStates = LinkedHashMap<String, DeviceState>()
-    private var taskGained: Int? = null
+
+    // null 表示当前没有运行中的积分任务
+    private var taskProgress: TaskProgress? = null
+
+    // 当前运行账号的显示名；null 表示单账号运行（通知不显示账号前缀）
+    private var taskAccountLabel: String? = null
 
     actual fun updateDevice(
         deviceId: String,
@@ -29,13 +35,22 @@ actual object RunNotifications {
         sync()
     }
 
-    actual fun updateTask(gained: Int) {
-        taskGained = gained.coerceAtLeast(0)
+    actual fun updateTaskAccount(label: String?) {
+        val normalized = label?.takeIf { it.isNotBlank() }
+        if (taskAccountLabel == normalized) return
+        taskAccountLabel = normalized
+        // 只在任务运行中才刷新通知，避免提前写入的状态被后续 updateTask 覆盖后闪烁
+        if (taskProgress != null) sync()
+    }
+
+    actual fun updateTask(progress: TaskProgress) {
+        taskProgress = progress
         sync()
     }
 
     actual fun removeTask() {
-        taskGained = null
+        taskProgress = null
+        taskAccountLabel = null
         sync()
     }
 
@@ -44,11 +59,11 @@ actual object RunNotifications {
     private fun sync() {
         val context = ApplicationContext.instance
         ensureRunChannels(context)
-        val gained = taskGained
+        val progress = taskProgress
         val primary =
             when {
-                gained != null -> {
-                    buildTaskNotification(context, gained)
+                progress != null -> {
+                    buildTaskNotification(context, progress, taskAccountLabel)
                 }
 
                 deviceStates.isNotEmpty() -> {
@@ -69,7 +84,7 @@ actual object RunNotifications {
         RunForegroundService.refresh(context, active = true, notificationId = RUN_NOTIFICATION_ID, notification = primary)
 
         // 主通知镜像已代表第一台设备（无任务时），避免与其单独通知重复
-        val mirroredDeviceId = if (gained == null) deviceStates.keys.firstOrNull() else null
+        val mirroredDeviceId = if (progress == null) deviceStates.keys.firstOrNull() else null
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager != null && canPostNotification(context, CHANNEL_DEVICE)) {
             deviceStates.values.forEach { state ->

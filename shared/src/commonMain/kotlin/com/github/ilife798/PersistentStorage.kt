@@ -57,6 +57,7 @@ object StorageKeys {
     const val DISCLAIMER_SHOWN = "setting_disclaimer_shown"
     const val LAUNCH_COUNT = "stats_launch_count"
     const val SPONSOR_PROMPT_STOPPED = "setting_sponsor_prompt_stopped"
+    const val TASK_SCHEDULE = "setting_task_schedule"
 }
 
 object AppStorage {

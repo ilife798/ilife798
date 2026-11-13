@@ -55,6 +55,9 @@ sealed class Page : NavKey {
         val token: Long,
     ) : Page()
 
+    /** 定时任务设置页：配置自动执行积分任务的时间。 */
+    @Serializable data object TaskSchedule : Page()
+
     /** 备份导入方式页：文件 / 剪贴板 / 扫码。 */
     @Serializable data object BackupImportSource : Page()
 

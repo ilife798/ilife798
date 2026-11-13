@@ -13,7 +13,9 @@ import com.github.ilife798.DeviceWidgetEntry
 import com.github.ilife798.DeviceWidgetResult
 import com.github.ilife798.DeviceWidgetTarget
 import com.github.ilife798.DeviceWidgets
+import com.github.ilife798.RunNotifications
 import com.github.ilife798.StorageKeys
+import com.github.ilife798.TaskScheduler
 import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.api.ScoreDto
@@ -48,12 +50,15 @@ import com.github.ilife798.data.model.RefundProgress
 import com.github.ilife798.data.model.ScoreFilter
 import com.github.ilife798.data.model.ScoreRecord
 import com.github.ilife798.data.model.SpendingStats
+import com.github.ilife798.data.model.TaskSchedule
 import com.github.ilife798.data.model.ThemeMode
 import com.github.ilife798.data.model.accountForImportKey
 import com.github.ilife798.data.model.buildImportPreview
 import com.github.ilife798.data.model.decodeBackup
+import com.github.ilife798.data.model.decodeTaskSchedule
 import com.github.ilife798.data.model.displayName
 import com.github.ilife798.data.model.displaySummary
+import com.github.ilife798.data.model.encodeTaskSchedule
 import com.github.ilife798.data.model.toBackupAccount
 import com.github.ilife798.dismissToast
 import com.github.ilife798.isIOS
@@ -95,6 +100,10 @@ private const val MAX_LAUNCH_COUNT = 101
 
 // 判断“确实跳到外部应用并返回”的最短离开时长。
 private const val SPONSOR_RETURN_THRESHOLD_MS = 1500L
+
+// 定时任务被闹钟拉起时，等待账号列表从磁盘就绪的轮询间隔与次数（共 5 秒）。
+private const val ACCOUNT_READY_DELAY_MS = 250L
+private const val ACCOUNT_READY_RETRIES = 20
 
 class AppViewModel : ViewModel() {
     // HttpClient 构建较重，延迟到首次网络调用时再创建，避免阻塞首帧渲染
@@ -192,6 +201,19 @@ class AppViewModel : ViewModel() {
             onReloadScores = { loadScoreInfo() },
         )
 
+    // 多账号批量执行（见 TaskBatchController）：任务页按钮与定时任务共用同一份实现
+    private val batch =
+        TaskBatchController(
+            scope = viewModelScope,
+            accounts = { state.accountList },
+            currentUid = { state.account.uid },
+            currentIndex = { state.currentAccountIndex },
+            switchAccount = ::switchAccount,
+            runTasks = { task.runForBatch() },
+            isLoading = { isLoading },
+            refreshAccountAssets = ::refreshAccountAssets,
+        )
+
     init {
         loadSettings()
         device.loadHomeDeviceTypePref()
@@ -251,7 +273,10 @@ class AppViewModel : ViewModel() {
                         ThemeMode.entries.firstOrNull { it.name == storage.getString(StorageKeys.THEME_MODE) }
                             ?: ThemeMode.System,
                     disclaimerAcknowledged = storage.getBoolean(StorageKeys.DISCLAIMER_SHOWN, false),
+                    taskSchedule = decodeTaskSchedule(storage.getString(StorageKeys.TASK_SCHEDULE)),
                 )
+            // 重启、升级或强制停止都会清掉系统闹钟，每次启动按已保存的计划兜底重排一次
+            TaskScheduler.reschedule(state.taskSchedule)
         } catch (e: Exception) {
             logError("loadSettings", e)
         }
@@ -1427,11 +1452,56 @@ class AppViewModel : ViewModel() {
 
     fun loadMissions() = task.loadMissions()
 
-    fun runTasksFromShortcut() = task.runFromShortcut()
+    // 快捷方式/通知入口运行单账号任务：与任务页按钮等价，通知不带账号前缀
+    fun runTasksFromShortcut() {
+        setTaskAccountLabel(null)
+        task.runFromShortcut()
+    }
 
-    fun runAllTasks() = task.runAll()
+    // 单账号运行：通知不带账号前缀
+    fun runSingleAccountTasks() {
+        setTaskAccountLabel(null)
+        task.runAll()
+    }
 
-    fun stopTasks() = task.stop()
+    val batching: Boolean by batch::batching
+
+    /**
+     * 批量运行：传入账号 uid，null 表示全部已登录账号。
+     *
+     * 任务页的「运行选中账号」与定时任务都走这里，到点触发不另起进程，
+     * 与用户手动按下按钮完全等价。
+     */
+    fun startBatchTasks(uids: List<String>? = null) = batch.start(uids)
+
+    // 定时任务到点：全部已登录账号依次执行一遍
+    fun runScheduledTasks() {
+        // 闹钟是一次性的，触发后立刻排下一次；即使本轮因为正在运行或未登录什么都没做，
+        // 也不会让计划就此失效。
+        TaskScheduler.reschedule(state.taskSchedule)
+        // 闹钟可能是在计划被关闭前设下的遗留，到点时要再确认一次，避免关掉还在后台跑
+        if (!state.taskSchedule.enabled) return
+        viewModelScope.launch {
+            // 闹钟常把应用从「进程已死」状态拉起，此时账号列表还没从磁盘读出来。
+            // 先等数据就绪（最多 5 秒），否则会拿到空列表并静默跳过整轮。
+            var waited = 0
+            while (state.accountList.isEmpty() && waited < ACCOUNT_READY_RETRIES) {
+                delay(ACCOUNT_READY_DELAY_MS)
+                waited++
+            }
+            // 用户此刻若正在手动跑任务，不要插入批量执行：切号会打断正在进行的那一轮
+            if (isLoading || batch.batching) return@launch
+            batch.start(null)
+        }
+    }
+
+    fun stopTasks() {
+        task.stop()
+        batch.stop()
+    }
+
+    // 通知正文的账号前缀：单账号为 null，批量运行时为当前账号名
+    fun setTaskAccountLabel(label: String?) = RunNotifications.updateTaskAccount(label)
 
     fun refreshTasks() = task.refresh()
 
@@ -1478,6 +1548,17 @@ class AppViewModel : ViewModel() {
         state = state.copy(themeMode = mode)
         AppStorage.instance.saveString(StorageKeys.THEME_MODE, mode.name)
     }
+
+    /** 定时计划变更后立即落盘并重排闹钟，保证用户改完那一刻就生效。 */
+    fun setTaskSchedule(schedule: TaskSchedule) {
+        val normalized = schedule.normalized
+        state = state.copy(taskSchedule = normalized)
+        AppStorage.instance.saveString(StorageKeys.TASK_SCHEDULE, encodeTaskSchedule(normalized))
+        TaskScheduler.reschedule(normalized)
+    }
+
+    /** 「下次执行」的可读文案；未启用或平台不支持时为 null。 */
+    fun taskScheduleNextRunText(): String? = TaskScheduler.describeNextRun(state.taskSchedule)
 
     // 首次启动须确认免责声明
     fun acknowledgeDisclaimer() {

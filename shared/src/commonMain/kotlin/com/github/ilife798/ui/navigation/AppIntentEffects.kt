@@ -65,6 +65,16 @@ fun AppIntentEffects(
         AppRequests.runTasks.consume()
     }
 
+    // 定时任务闹钟到点：与手动按下批量运行按钮等价，全部已登录账号依次执行
+    val runScheduledTasksRequestId = AppRequests.runScheduledTasks.id
+    LaunchedEffect(runScheduledTasksRequestId) {
+        if (runScheduledTasksRequestId <= 0) return@LaunchedEffect
+        clearToRoot()
+        mainPagerState.animateToPage(1)
+        viewModel.runScheduledTasks()
+        AppRequests.runScheduledTasks.consume()
+    }
+
     // 点击“正在下载”通知：回到“我的”页并重新弹出下载对话框
     val updateRequestId = AppRequests.showUpdate.id
     LaunchedEffect(updateRequestId) {

@@ -325,4 +325,5 @@ data class AppState(
     val accountInfo: AccountInfo = AccountInfo(),
     val weekMask: Int = 0,
     val disclaimerAcknowledged: Boolean = false,
+    val taskSchedule: TaskSchedule = TaskSchedule(),
 )

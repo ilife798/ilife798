@@ -52,6 +52,9 @@ object AppRequests {
     val openTasks = UiCommand()
     val stopTasks = UiCommand()
 
+    // 定时任务闹钟：等价于按下任务页的批量运行按钮，全部已登录账号依次执行
+    val runScheduledTasks = UiCommand()
+
     // 更新通知
     val showUpdate = UiCommand()
 }

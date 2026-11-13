@@ -1,5 +1,6 @@
 package com.github.ilife798
 
+import com.github.ilife798.data.model.TaskProgress
 import platform.UserNotifications.UNAuthorizationOptionAlert
 import platform.UserNotifications.UNAuthorizationOptionSound
 import platform.UserNotifications.UNMutableNotificationContent
@@ -28,11 +29,20 @@ actual object RunNotifications {
         }
     }
 
-    actual fun updateTask(gained: Int) {
-        post(TASK_NOTIFICATION_ID, "积分任务已获得 ${gained.coerceAtLeast(0)} 分")
+    // 当前运行账号的显示名：非空时拼在积分行前（对齐 Android 多账号运行）
+    private var taskAccountLabel: String? = null
+
+    actual fun updateTaskAccount(label: String?) {
+        taskAccountLabel = label?.takeIf { it.isNotBlank() }
+    }
+
+    actual fun updateTask(progress: TaskProgress) {
+        val lines = progress.bodyLines(taskAccountLabel)
+        post(TASK_NOTIFICATION_ID, lines.joinToString("\n"))
     }
 
     actual fun removeTask() {
+        taskAccountLabel = null
         remove(TASK_NOTIFICATION_ID)
     }
 
