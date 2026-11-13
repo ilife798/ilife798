@@ -10,13 +10,18 @@ sealed class Page : NavKey {
     @Serializable data class Login(
         val isAlipay: Boolean = false,
         val switchAccount: Boolean = false,
+        /** 从链接进入时预填的手机号（`ilife798://accounts/add/phone/{phone}`）。 */
+        val prefillPhone: String? = null,
     ) : Page()
 
     /** 登录方式选择页，从账号管理页的「登录其它账号」进入。 */
     @Serializable data object LoginMethod : Page()
 
     /** 账户凭证登录页，直接填写设备控制与积分任务的登录信息。 */
-    @Serializable data object TokenLogin : Page()
+    @Serializable data class TokenLogin(
+        val initialAppToken: String = "",
+        val initialToken: String = "",
+    ) : Page()
 
     /** 我的卡包：云卡绑定、挂失与激活。 */
     @Serializable data object CardBag : Page()
@@ -34,7 +39,9 @@ sealed class Page : NavKey {
         val billId: String,
     ) : Page()
 
-    @Serializable data object DeviceAdd : Page()
+    @Serializable data class DeviceAdd(
+        val prefillId: String? = null,
+    ) : Page()
 
     @Serializable data object DeviceScan : Page()
 
@@ -57,6 +64,14 @@ sealed class Page : NavKey {
 
     /** 定时任务设置页：配置自动执行积分任务的时间。 */
     @Serializable data object TaskSchedule : Page()
+
+    /** URL Scheme 说明页：列出可用链接，便于快捷指令与外部应用调用。 */
+    @Serializable data object Shortcut : Page()
+
+    /** URL Scheme 动作详情：填参数、生成链接、复制或打开。[action] 是 [com.github.ilife798.data.model.ShortcutAction] 的枚举名。 */
+    @Serializable data class ShortcutDetail(
+        val action: String,
+    ) : Page()
 
     /** 备份导入方式页：文件 / 剪贴板 / 扫码。 */
     @Serializable data object BackupImportSource : Page()

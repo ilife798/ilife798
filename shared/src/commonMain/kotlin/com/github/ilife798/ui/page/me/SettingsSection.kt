@@ -57,6 +57,7 @@ internal fun SettingsSection(
     onLicenseClick: () -> Unit,
     onBackupClick: () -> Unit,
     onTaskScheduleClick: () -> Unit,
+    onShortcutClick: () -> Unit,
     wideScreen: Boolean,
 ) {
     val state = viewModel.state
@@ -195,6 +196,11 @@ internal fun SettingsSection(
                 title = "定时任务",
                 summary = taskScheduleSummary(state.taskSchedule),
                 onClick = onTaskScheduleClick,
+            )
+            ArrowPreference(
+                title = "URL Scheme",
+                summary = "用快捷指令或外部链接调用应用功能",
+                onClick = onShortcutClick,
             )
         }
     }

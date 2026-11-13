@@ -53,11 +53,12 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 @Composable
 fun DeviceAddPage(
     viewModel: AppViewModel,
+    prefillId: String? = null,
     onBack: () -> Unit,
     onScanClick: () -> Unit = {},
     onNavigateToDevice: (String) -> Unit = {},
 ) {
-    var deviceId by remember { mutableStateOf("") }
+    var deviceId by remember { mutableStateOf(prefillId.orEmpty()) }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val deviceIdFocusRequester = remember { FocusRequester() }

@@ -38,6 +38,7 @@ import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.github.ilife798.data.model.BackupDocument
 import com.github.ilife798.data.model.ImportPreview
+import com.github.ilife798.data.model.ShortcutAction
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.showToast
 import com.github.ilife798.ui.page.account.AccountPage
@@ -57,6 +58,9 @@ import com.github.ilife798.ui.page.login.LoginPage
 import com.github.ilife798.ui.page.login.TokenLoginPage
 import com.github.ilife798.ui.page.me.CardBagPage
 import com.github.ilife798.ui.page.me.MePage
+import com.github.ilife798.ui.page.me.ShortcutDetailPage
+import com.github.ilife798.ui.page.me.ShortcutOption
+import com.github.ilife798.ui.page.me.ShortcutPage
 import com.github.ilife798.ui.page.score.ScorePage
 import com.github.ilife798.ui.page.tasks.TaskSchedulePage
 import com.github.ilife798.ui.page.tasks.TasksPage
@@ -280,7 +284,7 @@ private fun HomePagerPage(
         0 -> {
             HomePage(
                 viewModel = viewModel,
-                onDeviceAddClick = { navigate(Page.DeviceAdd) },
+                onDeviceAddClick = { navigate(Page.DeviceAdd()) },
                 onDeviceClick = { navigate(Page.DeviceDetail(it)) },
                 bottomPadding = bottomPadding,
             )
@@ -305,6 +309,7 @@ private fun HomePagerPage(
                 onLicenseClick = { navigate(Page.License) },
                 onBackupClick = { navigate(Page.Backup) },
                 onTaskScheduleClick = { navigate(Page.TaskSchedule) },
+                onShortcutClick = { navigate(Page.Shortcut) },
                 bottomPadding = bottomPadding,
                 wideScreen = wideScreen,
             )
@@ -360,7 +365,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                 val skipAdd =
                     backStack.size >= 2 &&
                         backStack.last() is Page.DeviceDetail &&
-                        backStack[backStack.lastIndex - 1] == Page.DeviceAdd
+                        backStack[backStack.lastIndex - 1] == Page.DeviceAdd()
                 backStack.removeLastOrNull()
                 if (skipAdd) {
                     backStack.removeLastOrNull()
@@ -372,7 +377,7 @@ fun MainScaffold(viewModel: AppViewModel) {
     val navigate: (Page) -> Unit =
         remember(backStack) {
             { page ->
-                if (page == Page.DeviceAdd) skipDeviceAdd.value = false
+                if (page is Page.DeviceAdd) skipDeviceAdd.value = false
                 if (backStack.lastOrNull() != page) backStack.add(page)
             }
         }
@@ -525,6 +530,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                         viewModel = viewModel,
                         isAlipay = key.isAlipay,
                         switchAccount = key.switchAccount,
+                        prefillPhone = key.prefillPhone,
                         onBack = onBack,
                     )
                 }
@@ -534,15 +540,17 @@ fun MainScaffold(viewModel: AppViewModel) {
                     LoginMethodPage(
                         viewModel = viewModel,
                         onPhoneLogin = { navigate(Page.Login(switchAccount = true)) },
-                        onCredentialLogin = { navigate(Page.TokenLogin) },
+                        onCredentialLogin = { navigate(Page.TokenLogin()) },
                         onBack = onBack,
                     )
                 }
             }
-            entry<Page.TokenLogin>(transition = detailTransition) {
+            entry<Page.TokenLogin>(transition = detailTransition) { key ->
                 NavEntry(interceptPredictiveBack, onBack) {
                     TokenLoginPage(
                         viewModel = viewModel,
+                        initialAppToken = key.initialAppToken,
+                        initialToken = key.initialToken,
                         onBack = onBack,
                     )
                 }
@@ -582,7 +590,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                     )
                 }
             }
-            entry<Page.DeviceAdd>(transition = deviceAddTransition) {
+            entry<Page.DeviceAdd>(transition = deviceAddTransition) { key ->
                 NavEntry(interceptPredictiveBack, onBack) {
                     val scope = LocalNavTransitionScope.current
                     Box(
@@ -595,6 +603,7 @@ fun MainScaffold(viewModel: AppViewModel) {
                     ) {
                         DeviceAddPage(
                             viewModel = viewModel,
+                            prefillId = key.prefillId,
                             onBack = onBack,
                             onScanClick = {
                                 navigate(Page.DeviceScan)
@@ -663,6 +672,61 @@ fun MainScaffold(viewModel: AppViewModel) {
             entry<Page.TaskSchedule>(transition = detailTransition) {
                 NavEntry(interceptPredictiveBack, onBack) {
                     TaskSchedulePage(viewModel = viewModel, onBack = onBack)
+                }
+            }
+            entry<Page.Shortcut>(transition = detailTransition) {
+                NavEntry(interceptPredictiveBack, onBack) {
+                    ShortcutPage(
+                        scheme = viewModel.state.shortcutScheme,
+                        onSchemeChange = { viewModel.setShortcutScheme(it) },
+                        onActionClick = { action -> navigate(Page.ShortcutDetail(action.name)) },
+                        onBack = onBack,
+                        appBlur = viewModel.state.appBlur,
+                    )
+                }
+            }
+            entry<Page.ShortcutDetail>(transition = detailTransition) { key ->
+                NavEntry(interceptPredictiveBack, onBack) {
+                    val action = ShortcutAction.entries.firstOrNull { it.name == key.action }
+                    if (action != null) {
+                        ShortcutDetailPage(
+                            action = action,
+                            scheme = viewModel.state.shortcutScheme,
+                            deviceOptions =
+                                viewModel.state.devices.map {
+                                    ShortcutOption(it.id, it.name.ifEmpty { it.id }, if (it.name.isEmpty()) "" else it.id)
+                                },
+                            accountOptions =
+                                viewModel.state.accountList.mapIndexed { index, entry ->
+                                    ShortcutOption(
+                                        value =
+                                            entry.account.phone
+                                                .ifEmpty { entry.account.uid }
+                                                .ifEmpty { index.toString() },
+                                        label =
+                                            entry.info.name
+                                                .ifEmpty { entry.account.phone }
+                                                .ifEmpty { "账号${index + 1}" },
+                                        secondary = entry.account.phone.ifEmpty { entry.account.uid },
+                                    )
+                                },
+                            uidOptions =
+                                viewModel.state.accountList.mapIndexedNotNull { index, entry ->
+                                    entry.account.uid.takeIf { it.isNotBlank() }?.let { uid ->
+                                        ShortcutOption(
+                                            value = uid,
+                                            label =
+                                                entry.info.name
+                                                    .ifEmpty { entry.account.phone }
+                                                    .ifEmpty { "账号${index + 1}" },
+                                            secondary = uid,
+                                        )
+                                    }
+                                },
+                            onBack = onBack,
+                            appBlur = viewModel.state.appBlur,
+                        )
+                    }
                 }
             }
             entry<Page.Backup>(transition = detailTransition) {

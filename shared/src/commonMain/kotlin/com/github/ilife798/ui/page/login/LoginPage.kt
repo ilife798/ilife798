@@ -55,13 +55,20 @@ fun LoginPage(
     viewModel: AppViewModel,
     isAlipay: Boolean = false,
     switchAccount: Boolean = false,
+    prefillPhone: String? = null,
     onBack: () -> Unit,
 ) {
     val account = viewModel.state.account
     val accountInfo = viewModel.state.accountInfo
     var phone by remember {
-        // 切换账号时不回填当前账号手机号
-        val initial = if (switchAccount) "" else account.phone.ifEmpty { accountInfo.pn }
+        // 优先用链接带来的手机号；切换账号时不回填当前账号手机号
+        val initial =
+            prefillPhone?.takeIf { it.isNotBlank() }
+                ?: if (switchAccount) {
+                    ""
+                } else {
+                    account.phone.ifEmpty { accountInfo.pn }
+                }
         mutableStateOf(TextFieldValue(text = initial, selection = TextRange(initial.length)))
     }
     var graphCode by remember { mutableStateOf("") }

@@ -43,10 +43,13 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun TokenLoginPage(
     viewModel: AppViewModel,
+    initialAppToken: String = "",
+    initialToken: String = "",
     onBack: () -> Unit,
 ) {
-    var deviceToken by remember { mutableStateOf("") }
-    var pointsToken by remember { mutableStateOf("") }
+    // 链接可以只带其中一个凭据，另一槽由用户自己补
+    var deviceToken by remember { mutableStateOf(initialAppToken) }
+    var pointsToken by remember { mutableStateOf(initialToken) }
     val isLoading = viewModel.isLoading
     val errorMessage = viewModel.errorMessage
     val dynamicColor = viewModel.state.dynamicColor

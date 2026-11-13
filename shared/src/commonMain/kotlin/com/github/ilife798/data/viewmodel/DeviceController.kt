@@ -732,6 +732,7 @@ class DeviceController(
         deviceId: String,
         args: String = "",
         forceStop: Boolean = false,
+        forceStart: Boolean = false,
     ) {
         // 详情页临时选了账号就用该账号，否则沿用全局当前账号
         val picked = deviceAuthOf(deviceAccountPick(deviceId))
@@ -748,7 +749,17 @@ class DeviceController(
             try {
                 if (!isCurrentToken(auth.token)) return@launch
                 val currentStatus = if (forceStop) null else api.getDevStatus(auth.token, deviceId, auth.appType)
-                val starting = !forceStop && currentStatus?.geneStatus == 99
+                if (forceStart) {
+                    if (currentStatus == null) {
+                        onToast("获取设备状态失败")
+                        return@launch
+                    }
+                    if (currentStatus.geneStatus != 99) {
+                        onToast("设备已在运行")
+                        return@launch
+                    }
+                }
+                val starting = forceStart || (!forceStop && currentStatus?.geneStatus == 99)
                 if (starting) startingDeviceId = deviceId
                 var usedAuth = auth
                 val result =
@@ -967,5 +978,10 @@ class DeviceController(
     // 通知“停止”按钮：强制停止对应设备（不依赖当前状态判断）
     fun stopDevice(deviceId: String) {
         toggleDeviceRunning(deviceId, forceStop = true)
+    }
+
+    // scheme「启动设备」：只启动不切换；已在运行时提示，不重复发起扣费启动
+    fun runDevice(deviceId: String) {
+        toggleDeviceRunning(deviceId, forceStart = true)
     }
 }

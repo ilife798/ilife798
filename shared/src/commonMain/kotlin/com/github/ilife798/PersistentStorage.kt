@@ -58,6 +58,7 @@ object StorageKeys {
     const val LAUNCH_COUNT = "stats_launch_count"
     const val SPONSOR_PROMPT_STOPPED = "setting_sponsor_prompt_stopped"
     const val TASK_SCHEDULE = "setting_task_schedule"
+    const val SHORTCUT_SCHEME = "setting_shortcut_scheme"
 }
 
 object AppStorage {

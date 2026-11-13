@@ -326,4 +326,5 @@ data class AppState(
     val weekMask: Int = 0,
     val disclaimerAcknowledged: Boolean = false,
     val taskSchedule: TaskSchedule = TaskSchedule(),
+    val shortcutScheme: String = DEFAULT_SHORTCUT_SCHEME,
 )

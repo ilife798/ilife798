@@ -28,6 +28,12 @@ struct iOSApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                // 快捷指令 / 外部应用通过 ilife798://… 唤起时，把链接交给 Kotlin 侧解析并派发。
+                // Swift 不持有 ViewModel：这里只写 AppRequests 信号，真正的跳转由 Compose 里的
+                // AppIntentEffects 消费，与 Android 的 handleIntent 走同一条路径。
+                .onOpenURL { url in
+                    _ = ShortcutRouter.shared.handleUrl(url: url.absoluteString)
+                }
         }
         .onChange(of: scenePhase) { newPhase in
             // iOS 15 兼容：使用单参数 onChange（两参数版本需 iOS 17+）。

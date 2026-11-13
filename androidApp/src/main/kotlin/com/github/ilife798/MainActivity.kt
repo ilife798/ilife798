@@ -75,6 +75,11 @@ class MainActivity : ComponentActivity() {
         ) {
             handleNdefIntent(intent)
         }
+        // 快捷指令 / 外部链接：ilife798://<动作>?参数。与 iOS 的 onOpenURL 共用同一个解析器，
+        // 统一在这里落到 AppRequests 信号上，界面侧由 AppIntentEffects 消费。
+        if (intent?.action == Intent.ACTION_VIEW && ShortcutRouter.handleUrl(intent.dataString)) {
+            return
+        }
         when (intent?.action) {
             IntentActions.ACTION_OPEN_WIDGET_DEVICE -> {
                 val deviceId = intent.getStringExtra(IntentActions.EXTRA_DEVICE_ID)
@@ -93,7 +98,7 @@ class MainActivity : ComponentActivity() {
             }
 
             IntentActions.ACTION_RUN_TASKS -> {
-                AppRequests.runTasks.request()
+                AppRequests.runTasks.request(false)
             }
 
             IntentActions.ACTION_RUN_SCHEDULED_TASKS -> {
@@ -109,7 +114,7 @@ class MainActivity : ComponentActivity() {
             }
 
             IntentActions.ACTION_STOP_DEVICE -> {
-                intent.getStringExtra(IntentActions.EXTRA_DEVICE_ID)?.let { AppRequests.stopDevice.request(it) }
+                intent.getStringExtra(IntentActions.EXTRA_DEVICE_ID)?.let { AppRequests.stopDevice.request(DeviceActionRequest(it)) }
             }
 
             IntentActions.ACTION_OPEN_TASKS -> {
@@ -118,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
             IntentActions.ACTION_STOP_TASKS -> {
                 // 停止按钮同时覆盖两条路径：界面里正在跑的任务，以及后台服务里的一轮
-                AppRequests.stopTasks.request()
+                AppRequests.stopTasks.request(false)
                 runCatching { stopService(Intent(this, ScheduledTaskService::class.java)) }
                     .onFailure { logDebug("ILife798", "MainActivity.stopTasks: ${it.message}") }
             }

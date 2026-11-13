@@ -34,6 +34,7 @@ import com.github.ilife798.data.model.BackupOption
 import com.github.ilife798.data.model.BillDetailInfo
 import com.github.ilife798.data.model.CloudCard
 import com.github.ilife798.data.model.DEFAULT_SEED_COLOR
+import com.github.ilife798.data.model.DEFAULT_SHORTCUT_SCHEME
 import com.github.ilife798.data.model.Device
 import com.github.ilife798.data.model.DeviceAliases
 import com.github.ilife798.data.model.DeviceDetailInfo
@@ -48,6 +49,7 @@ import com.github.ilife798.data.model.PendingRecharge
 import com.github.ilife798.data.model.PointsInfo
 import com.github.ilife798.data.model.RechargeProduct
 import com.github.ilife798.data.model.RefundProgress
+import com.github.ilife798.data.model.SHORTCUT_SCHEMES
 import com.github.ilife798.data.model.ScoreFilter
 import com.github.ilife798.data.model.ScoreRecord
 import com.github.ilife798.data.model.SpendingStats
@@ -278,6 +280,11 @@ class AppViewModel : ViewModel() {
                             ?: ThemeMode.System,
                     disclaimerAcknowledged = storage.getBoolean(StorageKeys.DISCLAIMER_SHOWN, false),
                     taskSchedule = decodeTaskSchedule(storage.getString(StorageKeys.TASK_SCHEDULE)),
+                    shortcutScheme =
+                        storage
+                            .getString(StorageKeys.SHORTCUT_SCHEME)
+                            ?.takeIf { it in SHORTCUT_SCHEMES }
+                            ?: DEFAULT_SHORTCUT_SCHEME,
                 )
             // 重启、升级或强制停止都会清掉系统闹钟，每次启动按已保存的计划兜底重排一次
             TaskScheduler.reschedule(state.taskSchedule)
@@ -1126,6 +1133,8 @@ class AppViewModel : ViewModel() {
 
     fun stopDevice(deviceId: String) = device.stopDevice(deviceId)
 
+    fun runDevice(deviceId: String) = device.runDevice(deviceId)
+
     // 设备详情页的临时账号选择，仅影响本机设备操作，不改全局登录态
     fun deviceAccountPick(deviceId: String): Int = device.deviceAccountPick(deviceId)
 
@@ -1579,6 +1588,13 @@ class AppViewModel : ViewModel() {
 
     /** 「下次执行」的可读文案；未启用或平台不支持时为 null。 */
     fun taskScheduleNextRunText(): String? = TaskScheduler.describeNextRun(state.taskSchedule)
+
+    /** URL Scheme 页面选中的协议头，只影响展示与复制，解析端三种都认。 */
+    fun setShortcutScheme(scheme: String) {
+        if (scheme !in SHORTCUT_SCHEMES) return
+        state = state.copy(shortcutScheme = scheme)
+        AppStorage.instance.saveString(StorageKeys.SHORTCUT_SCHEME, scheme)
+    }
 
     // 首次启动须确认免责声明
     fun acknowledgeDisclaimer() {

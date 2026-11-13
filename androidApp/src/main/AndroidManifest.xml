@@ -57,6 +57,15 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
 
+            <!-- 快捷指令 / 外部链接：ilife798://<资源>/<动作>，与 iOS 共用同一套 scheme 与解析逻辑。
+                 除主 scheme 外还注册非官方商店分发时常用的反向域名别名。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ilife798" />
+                <data android:scheme="com.github.ilife798" />
+            </intent-filter>
             <!-- NFC 标签按应用包名（mimeType=application/<包名>）拉起本应用并携带设备链接 -->
             <intent-filter>
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
