@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.RunNotifications
+import com.github.ilife798.TaskRunBridge
 import com.github.ilife798.data.api.CODE_RATE_LIMITED
 import com.github.ilife798.data.api.IlifeApi
 import com.github.ilife798.data.api.PointsQueryException
@@ -388,6 +389,8 @@ class TaskController(
     /** @return 是否真的启动了执行；被前置条件挡下时返回 false，批量调度据此判断无需等待。 */
     fun runAll(ignoreCompleted: Boolean = false): Boolean {
         if (getLoading()) return false
+        // 后台路径正在执行时让路：同一账号并发两轮会撞服务端频控（-98），两轮都会失败。
+        if (TaskRunBridge.backgroundRunning) return false
         if (!ignoreCompleted && getState().taskCompleted) return false
         val uid = getState().account.uid
         val account = getState().account
@@ -404,6 +407,7 @@ class TaskController(
         // 同步置为「运行中」：批量调度会在 runTasks() 返回后立刻查 isLoading，
         // 若等到协程内部才置位，它会误判成没在跑，提前切号并取消刚启动的这一轮。
         onLoadingChange(true)
+        TaskRunBridge.setUiRunning(true)
         taskJob =
             scope.launch {
                 onError(null)
@@ -499,6 +503,7 @@ class TaskController(
                     }
                 } finally {
                     RunNotifications.removeTask()
+                    TaskRunBridge.setUiRunning(false)
                     if (isCurrentAccount()) {
                         onLoadingChange(false)
                         onReloadScores()
@@ -633,6 +638,7 @@ class TaskController(
         taskJob?.cancel()
         taskJob = null
         onLoadingChange(false)
+        TaskRunBridge.setUiRunning(false)
         RunNotifications.removeTask()
         onToast("积分任务已停止")
     }
@@ -660,6 +666,15 @@ class TaskController(
     private fun addTaskLog(message: String) {
         val time = currentTimeFormatted("HH:mm:ss")
         setState { it.copy(taskLogs = it.taskLogs + "[$time] $message") }
+    }
+
+    /**
+     * 后台路径产生的一行日志：只追加文本，由这里统一加时间戳。
+     *
+     * 后台进程可能没有界面，但任务页开着时要能实时看到进度，所以走同一条 taskLogs 通道。
+     */
+    fun appendBackgroundLog(message: String) {
+        addTaskLog(message)
     }
 
     private companion object {

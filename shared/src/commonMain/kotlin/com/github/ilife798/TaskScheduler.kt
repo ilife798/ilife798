@@ -33,4 +33,12 @@ expect object TaskScheduler {
 
     /** 打开系统的「精确闹钟」授权页面；平台不符或无此页面时不作处理。 */
     fun openExactAlarmSettings()
+
+    /**
+     * 停止正在执行的后台通道（前台服务与排队中的 WorkManager 任务）。
+     *
+     * 任务页的停止按钮要能停下后台那一轮，但界面层拿不到平台服务类，只有这里能落地。
+     * 没有后台通道的平台实现为 no-op。
+     */
+    fun stopBackgroundRun()
 }

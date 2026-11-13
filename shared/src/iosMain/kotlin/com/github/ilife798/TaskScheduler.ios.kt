@@ -19,4 +19,6 @@ actual object TaskScheduler {
     actual val exactAlarmGranted: Boolean = true
 
     actual fun openExactAlarmSettings() = Unit
+
+    actual fun stopBackgroundRun() = Unit
 }

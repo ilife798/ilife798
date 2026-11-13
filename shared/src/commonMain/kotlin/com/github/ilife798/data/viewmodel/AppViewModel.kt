@@ -15,6 +15,7 @@ import com.github.ilife798.DeviceWidgetTarget
 import com.github.ilife798.DeviceWidgets
 import com.github.ilife798.RunNotifications
 import com.github.ilife798.StorageKeys
+import com.github.ilife798.TaskRunBridge
 import com.github.ilife798.TaskScheduler
 import com.github.ilife798.data.api.DevResult
 import com.github.ilife798.data.api.IlifeApi
@@ -226,6 +227,9 @@ class AppViewModel : ViewModel() {
             update.onAppResumed()
             handleSponsorReturn()
         }
+        // 后台执行（定时任务的「后台运行」）只通过 TaskRunBridge 报告状态，这里翻译成界面状态：
+        // 运行日志追加进 taskLogs，进度与账号前缀写回 state 供任务页展示。
+        TaskRunBridge.onLog = { message -> task.appendBackgroundLog(message) }
         viewModelScope.launch {
             delay(1500.milliseconds)
             if (update.checkUpdateOnStart) update.checkForUpdate(silent = true)
@@ -1467,6 +1471,15 @@ class AppViewModel : ViewModel() {
     val batching: Boolean by batch::batching
 
     /**
+     * 任务是否正在运行（界面通道与后台通道合并后的状态）。
+     *
+     * 任务页的按钮文案、账号勾选锁定都应以它为准：后台（定时任务「后台运行」）到点执行时
+     * 界面此前完全无感，用户会以为没跑而再点一次，导致同一账号并发两轮撞上服务端频控。
+     */
+    val taskRunning: Boolean
+        get() = isLoading || batching || TaskRunBridge.backgroundRunning
+
+    /**
      * 批量运行：传入账号 uid，null 表示全部已登录账号。
      *
      * 任务页的「运行选中账号」与定时任务都走这里，到点触发不另起进程，
@@ -1498,6 +1511,8 @@ class AppViewModel : ViewModel() {
     fun stopTasks() {
         task.stop()
         batch.stop()
+        // 后台通道不在这个进程的 ViewModel 里，只能通过调度器停它的前台服务与排队任务
+        if (TaskRunBridge.backgroundRunning) TaskScheduler.stopBackgroundRun()
     }
 
     // 通知正文的账号前缀：单账号为 null，批量运行时为当前账号名
@@ -1639,6 +1654,7 @@ class AppViewModel : ViewModel() {
 
     override fun onCleared() {
         AppLifecycle.onResumed = null
+        TaskRunBridge.onLog = null
     }
 
     val updateDialog: UpdateDialogState get() = update.dialog

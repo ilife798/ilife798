@@ -43,6 +43,8 @@ internal object ScheduledTaskRunner {
         context: Context,
         onProgress: (TaskProgress, String?) -> Unit,
     ): Outcome {
+        // 界面上正在跑同一批账号时直接让路：两条路径并发执行会撞服务端频控（-98），两轮都失败
+        if (TaskRunBridge.uiRunning) return Outcome(skippedReason = "应用内正在运行积分任务，已跳过本轮")
         ensureApiConfig()
         // 取整条 AccountEntry：昵称在 info 里，只取 Account 会退化成显示手机号
         val entries =
@@ -51,14 +53,22 @@ internal object ScheduledTaskRunner {
             }
         if (entries.isEmpty()) return Outcome(skippedReason = "没有已登录的账号")
         val session = DeviceWidgetSession()
+        // 通知界面这一轮从后台开始：任务页据此点亮「运行中」、锁定账号勾选
+        TaskRunBridge.startBackground()
         return try {
             val runner =
                 TaskBackgroundRunner(api = session.api) { message ->
                     logDebug("ILife798", message)
+                    // 任务页开着时同步进运行日志，否则用户只能看到一片空白
+                    TaskRunBridge.appendBackgroundLog(message)
                 }
-            runner.onProgress = onProgress
+            runner.onProgress = { progress, label ->
+                TaskRunBridge.updateBackground(progress, label)
+                onProgress(progress, label)
+            }
             Outcome(results = withContext(Dispatchers.IO) { runner.runAll(entries) })
         } finally {
+            TaskRunBridge.finishBackground()
             session.close()
         }
     }

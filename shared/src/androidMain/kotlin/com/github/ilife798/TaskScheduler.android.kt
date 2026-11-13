@@ -46,6 +46,9 @@ actual object TaskScheduler {
 
     private const val BACKGROUND_RECEIVER_CLASS = "com.github.ilife798.TaskAlarmReceiver"
 
+    // 后台执行用的前台服务在 androidApp 模块里，这里只能按类名引用，避免 shared 反向依赖上层。
+    private const val BACKGROUND_SERVICE_CLASS = "com.github.ilife798.ScheduledTaskService"
+
     // 无法申请精确闹钟时的容错窗口：向后放宽 10 分钟，避免系统把触发时间推到过远。
     private const val INEXACT_WINDOW_MS = 10 * 60 * 1000L
 
@@ -74,6 +77,12 @@ actual object TaskScheduler {
             if (started) return
         }
         logDebug("ILife798", "TaskScheduler.openExactAlarmSettings: 无法打开授权页面")
+    }
+
+    actual fun stopBackgroundRun() {
+        val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
+        runCatching { context.stopService(Intent().setClassName(context.packageName, BACKGROUND_SERVICE_CLASS)) }
+            .onFailure { logDebug("ILife798", "TaskScheduler.stopBackgroundRun: ${it.message}") }
     }
 
     actual fun reschedule(schedule: TaskSchedule) {

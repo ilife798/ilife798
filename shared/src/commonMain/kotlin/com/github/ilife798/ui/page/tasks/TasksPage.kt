@@ -64,7 +64,9 @@ fun TasksPage(
 ) {
     val state = viewModel.state
     val missions = viewModel.missions
-    val isLoading = viewModel.isLoading
+    // 运行状态要用合并后的值：后台（定时任务「后台运行」）到点执行时也要点亮「运行中」、
+    // 锁定账号勾选，否则用户会以为没跑而再点一次，导致同一账号并发两轮撞服务端频控。
+    val isLoading = viewModel.taskRunning
     // 多账号批量运行：勾选账号后依次切号执行，跑完恢复原账号。
     // 具体流程在 TaskBatchController 里，定时任务走的是同一份实现。
     val batching = viewModel.batching
