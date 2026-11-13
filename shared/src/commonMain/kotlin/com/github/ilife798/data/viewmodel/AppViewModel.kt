@@ -1511,8 +1511,13 @@ class AppViewModel : ViewModel() {
     fun stopTasks() {
         task.stop()
         batch.stop()
-        // 后台通道不在这个进程的 ViewModel 里，只能通过调度器停它的前台服务与排队任务
-        if (TaskRunBridge.backgroundRunning) TaskScheduler.stopBackgroundRun()
+        // 后台通道不在这个进程的 ViewModel 里，只能通过调度器停它的前台服务与排队任务。
+        // 先留下显式停止意图：光停服务只是让系统回收，协程会继续跑到下一轮才发现被取消，
+        // 那条路径抛出的取消与真实异常难以区分，用户看到的是「执行失败」。
+        if (TaskRunBridge.backgroundRunning) {
+            TaskRunBridge.requestStop()
+            TaskScheduler.stopBackgroundRun()
+        }
     }
 
     // 通知正文的账号前缀：单账号为 null，批量运行时为当前账号名

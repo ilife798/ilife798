@@ -20,5 +20,7 @@ actual object TaskScheduler {
 
     actual fun openExactAlarmSettings() = Unit
 
+    actual fun startBackgroundRun() = Unit
+
     actual fun stopBackgroundRun() = Unit
 }

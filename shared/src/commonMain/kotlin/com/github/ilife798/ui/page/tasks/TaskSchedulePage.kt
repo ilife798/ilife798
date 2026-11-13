@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.TaskScheduler
+import com.github.ilife798.data.model.KeepAliveVendor
 import com.github.ilife798.data.model.TaskSchedule
 import com.github.ilife798.data.viewmodel.AppViewModel
 import com.github.ilife798.ui.component.BlurredTopAppBar
@@ -32,7 +34,10 @@ import com.github.ilife798.ui.component.PageScrollColumn
 import com.github.ilife798.ui.component.SwitchPreference
 import com.github.ilife798.ui.theme.rememberAppBlurBackdrop
 import com.github.ilife798.util.isIgnoringBatteryOptimizations
+import com.github.ilife798.util.keepAliveVendor
 import com.github.ilife798.util.openBatteryOptimizationSettings
+import com.github.ilife798.util.openKeepAliveSettings
+import com.github.ilife798.util.openRecentTasks
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -222,6 +227,11 @@ fun TaskSchedulePage(
                 ExactAlarmCard()
             }
 
+            if (supported && schedule.runInBackground) {
+                Spacer(Modifier.height(4.dp))
+                KeepAliveCard()
+            }
+
             if (supported && !isIgnoringBatteryOptimizations()) {
                 Spacer(Modifier.height(4.dp))
                 BatteryCard()
@@ -332,6 +342,87 @@ private fun BatteryCard() {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(16.dp),
         )
+    }
+}
+
+/**
+ * 保活引导：把「系统层面还得再开几个开关」讲清楚。
+ *
+ * 为什么单独做一张卡而不是塞进电池优化提示：电池优化白名单是 AOSP 的通用机制，类原生系统
+ * 上做到这一步就够了；但 MIUI / ColorOS / OriginOS / EMUI 这些系统还有厂商自己的
+ * 「自启动」「后台运行」开关，不开的话前台服务照样会被冻结，而系统没有 API 能查能改，
+ * 只能把人送到对应的设置页。
+ */
+@Composable
+private fun KeepAliveCard() {
+    val current = remember { keepAliveVendor() }
+    var expanded by remember { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "让系统别把后台任务杀掉",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text =
+                    "检测到你使用的是 ${current.title}（${current.systemName}）。" +
+                        "各家系统的省电策略默认会冻结后台进程，请按下面几步放开限制。",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Spacer(Modifier.height(10.dp))
+            current.steps.forEachIndexed { index, step ->
+                Text(
+                    text = "${index + 1}. $step",
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(vertical = 2.dp),
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "打开自启动设置",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.fillMaxWidth().clickable { openKeepAliveSettings() }.padding(vertical = 6.dp),
+            )
+            Text(
+                text = "打开最近任务（手动给本应用加锁）",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().clickable { openRecentTasks() }.padding(vertical = 6.dp),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = if (expanded) "收起其他厂商的步骤" else "不是这个厂商？查看其他系统",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 4.dp),
+            )
+            if (expanded) {
+                KeepAliveVendor.all.filter { it != current }.forEach { vendor ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "${vendor.title}（${vendor.systemName}）",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    vendor.steps.forEachIndexed { index, step ->
+                        Text(
+                            text = "${index + 1}. $step",
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -57,11 +57,17 @@ internal object ScheduledTaskRunner {
         TaskRunBridge.startBackground()
         return try {
             val runner =
-                TaskBackgroundRunner(api = session.api) { message ->
-                    logDebug("ILife798", message)
-                    // 任务页开着时同步进运行日志，否则用户只能看到一片空白
-                    TaskRunBridge.appendBackgroundLog(message)
-                }
+                TaskBackgroundRunner(
+                    api = session.api,
+                    // 用户点「停止」时置位，让循环在下一轮开始前就退出。
+                    // 只停服务是不够的：stopService 要等 onDestroy 才取消协程，中间会继续发请求。
+                    shouldStop = { TaskRunBridge.isStopRequested },
+                    onLog = { message ->
+                        logDebug("ILife798", message)
+                        // 任务页开着时同步进运行日志，否则用户只能看到一片空白
+                        TaskRunBridge.appendBackgroundLog(message)
+                    },
+                )
             runner.onProgress = { progress, label ->
                 TaskRunBridge.updateBackground(progress, label)
                 onProgress(progress, label)

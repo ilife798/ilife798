@@ -41,6 +41,20 @@ actual object TaskScheduler {
     /** 后台运行时闹钟发出的广播，由 `TaskAlarmReceiver` 接手并转交 WorkManager。 */
     const val ACTION_RUN_BACKGROUND_TASKS = "com.github.ilife798.action.RUN_BACKGROUND_TASKS"
 
+    /**
+     * 让常驻服务「挂上」但不执行任务：应用启动或计划变更时用。
+     *
+     * 保活的意义在于进程状态：前台服务存在期间系统不会冻结/快速回收本应用，
+     * 闹钟到点才有机会立刻开跑。它不负责触发任务，触发走 [ACTION_RUN_RESIDENT_TASKS]。
+     */
+    const val ACTION_ENSURE_RESIDENT = "com.github.ilife798.action.ENSURE_RESIDENT"
+
+    /** 闹钟到点后让常驻服务执行一轮任务。 */
+    const val ACTION_RUN_RESIDENT_TASKS = "com.github.ilife798.action.RUN_RESIDENT_TASKS"
+
+    /** 用户在保活通知上点「停止」：只停本次保活，计划本身不关闭。 */
+    const val ACTION_STOP_RESIDENT = "com.github.ilife798.action.STOP_RESIDENT"
+
     /** 后台任务在 WorkManager 队列里的唯一名称：同一时刻只允许一轮在跑。 */
     const val BACKGROUND_WORK_NAME = "ilife798_scheduled_tasks"
 
@@ -79,10 +93,27 @@ actual object TaskScheduler {
         logDebug("ILife798", "TaskScheduler.openExactAlarmSettings: 无法打开授权页面")
     }
 
+    actual fun startBackgroundRun() {
+        val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
+        val intent =
+            Intent()
+                .setClassName(context.packageName, BACKGROUND_SERVICE_CLASS)
+                .setAction(ACTION_ENSURE_RESIDENT)
+        runCatching {
+            androidx.core.content.ContextCompat
+                .startForegroundService(context, intent)
+        }.onFailure { logDebug("ILife798", "TaskScheduler.startBackgroundRun: ${it.message}") }
+    }
+
     actual fun stopBackgroundRun() {
         val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
         runCatching { context.stopService(Intent().setClassName(context.packageName, BACKGROUND_SERVICE_CLASS)) }
             .onFailure { logDebug("ILife798", "TaskScheduler.stopBackgroundRun: ${it.message}") }
+        // 兜底：部分 ROM 在 stopService 后仍保留前台通知，这里再显式取消一次，
+        // 同时把可能残留的进度通知清掉，避免「计划关了通知还在」。
+        ScheduledTaskNotifications.cancelResident(context)
+        ScheduledTaskNotifications.cancelProgress(context)
+        logDebug("ILife798", "TaskScheduler.stopBackgroundRun: 已停止常驻")
     }
 
     actual fun reschedule(schedule: TaskSchedule) {
@@ -97,7 +128,13 @@ actual object TaskScheduler {
         // 表现为切到后台后仍被 Activity 型闹钟拉起界面，或切回前台后多触发一轮。
         alarmManager.cancel(pendingIntent(context, null))
         alarmManager.cancel(pendingIntent(context, TaskSchedule(runInBackground = true)))
-        if (!normalized.enabled) return
+        if (!normalized.enabled) {
+            // 计划关掉了，保活服务也没有继续趴着的理由
+            stopBackgroundRun()
+            return
+        }
+        // 后台运行期间维持常驻：进程被系统盯上时，有前台服务的那条命明显更硬。
+        if (normalized.runInBackground) startBackgroundRun() else stopBackgroundRun()
         val triggerAt = nextTriggerAt(normalized, System.currentTimeMillis())
         setAlarm(alarmManager, triggerAt, pendingIntent(context, normalized))
         // 精确闹钟被拒时系统会退回窗口闹钟，用户只表现为「到点没反应」，
@@ -112,6 +149,8 @@ actual object TaskScheduler {
     actual fun cancel() {
         val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return
         cancelWork(context)
+        // 取消调度意味着计划已经关掉，保活服务与它的通知都不能再留着
+        stopBackgroundRun()
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         alarmManager.cancel(pendingIntent(context, null))
         alarmManager.cancel(pendingIntent(context, TaskSchedule(runInBackground = true)))

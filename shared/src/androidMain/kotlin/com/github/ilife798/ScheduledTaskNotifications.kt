@@ -1,6 +1,8 @@
 package com.github.ilife798
 
 import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import com.github.ilife798.data.model.TaskProgress
 
@@ -21,7 +23,64 @@ object ScheduledTaskNotifications {
     /** 本轮结果汇总的 id，独立于进度通知，可单独划掉。 */
     const val RESULT_ID = 2003
 
+    /**
+     * 保活通知的 id：后台运行开启期间一直挂着的那条。
+     *
+     * 与 `RUNNING_ID` 分开是必须的：一个服务同时只持有一条前台通知，保活期间它是常驻的；
+     * 如果拿进度通知 2001 去当前台通知，跑完一轮就撤掉，服务也就跟着失去前台地位被系统回收。
+     */
+    const val RESIDENT_ID = 2004
+
     fun ensureChannel(context: Context) = ensureRunChannels(context)
+
+    /**
+     * 保活通知：后台运行开着就一直挂着。
+     *
+     * @param stopIntent 通知上「停止」按钮的意图，点它等于关掉后台运行。
+     * @param nextRun 下次执行的可读时间，未知时传 null。
+     */
+    fun residentNotification(
+        context: Context,
+        stopIntent: PendingIntent,
+        nextRun: String?,
+    ): Notification = buildResidentNotification(context, stopIntent, nextRun)
+
+    /** 清掉可能残留的进度通知（进程被杀后它会永远停在「运行中」）。 */
+    fun cancelProgress(context: Context) {
+        runCatching {
+            context
+                .getSystemService(NotificationManager::class.java)
+                ?.cancel(RUNNING_ID)
+        }
+    }
+
+    /**
+     * 撤掉保活通知。
+     *
+     * 服务被 [android.app.Service.stopService] 停掉时框架通常会把前台通知一起收走，
+     * 但国产 ROM（ColorOS/HyperOS 等）上有保留的实例，所以关闭后台运行、服务发现
+     * 计划已失效时都显式再取消一次，避免「关掉了通知还挂在那」。
+     */
+    fun cancelResident(context: Context) {
+        runCatching {
+            context
+                .getSystemService(NotificationManager::class.java)
+                ?.cancel(RESIDENT_ID)
+        }
+    }
+
+    /** 走常驻通道时，进度通知改用普通通知投递，避免与前台通知抢同一个槽位。 */
+    fun notifyProgress(
+        context: Context,
+        progress: TaskProgress,
+        accountLabel: String?,
+    ) {
+        runCatching {
+            context
+                .getSystemService(NotificationManager::class.java)
+                ?.notify(RUNNING_ID, progressNotification(context, progress, accountLabel))
+        }
+    }
 
     fun canNotify(context: Context): Boolean = canPostNotification(context, CHANNEL)
 

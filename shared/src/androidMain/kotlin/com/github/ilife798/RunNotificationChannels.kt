@@ -10,6 +10,15 @@ import android.os.Build
 internal const val CHANNEL_DEVICE = "device_running"
 internal const val CHANNEL_TASK = "task_running"
 
+/**
+ * 定时任务「后台运行」的保活通道。
+ *
+ * 与 [CHANNEL_TASK] 分开的理由：进度通知是执行期间才有的、跑完就该消失，用户可能想单独关掉它；
+ * 保活通知是「这个功能开着就一直挂在那」的状态提示，两者的打扰预期不同，混在一个通道里
+ * 用户没法只静音其中一个。默认低打扰，不出声、不弹横幅。
+ */
+internal const val CHANNEL_RESIDENT = "scheduled_resident"
+
 internal fun ensureRunChannels(context: Context) {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return
     if (manager.getNotificationChannel(CHANNEL_DEVICE) == null) {
@@ -33,6 +42,19 @@ internal fun ensureRunChannels(context: Context) {
             ).apply {
                 description = "积分任务运行期间显示已获得积分与停止操作"
                 setShowBadge(false)
+            },
+        )
+    }
+    if (manager.getNotificationChannel(CHANNEL_RESIDENT) == null) {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_RESIDENT,
+                "定时任务后台常驻",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "开启定时任务的后台运行后常驻显示，关闭后自动消失"
+                setShowBadge(false)
+                enableVibration(false)
             },
         )
     }

@@ -157,6 +157,45 @@ fun buildTaskResultNotification(
         ).setAutoCancel(true)
         .build()
 
+/**
+ * 保活通知：定时任务开着「后台运行」时一直挂着的常驻通知。
+ *
+ * 它不显示进度，作用是让前台服务活着——进程有前台服务时系统不会把它冻结或快速回收，
+ * 闹钟到点才能立刻执行。走单独的 [CHANNEL_RESIDENT] 通道（低打扰、无振动、无角标），
+ * 用户可以只静音它而不影响执行期间的进度通知。
+ */
+internal fun buildResidentNotification(
+    context: Context,
+    stopIntent: PendingIntent,
+    nextRun: String?,
+): Notification {
+    val text =
+        if (nextRun.isNullOrBlank()) {
+            "后台运行已开启，到点会自动执行积分任务"
+        } else {
+            "后台运行已开启，下次执行：$nextRun"
+        }
+    return Notification
+        .Builder(context, CHANNEL_RESIDENT)
+        .setSmallIcon(appIconRes(context))
+        .setContentTitle("定时任务后台运行中")
+        .setContentText(text)
+        .setStyle(Notification.BigTextStyle().bigText(text))
+        .setContentIntent(
+            activityPendingIntent(
+                context,
+                REQUEST_TASK_CONTENT,
+                IntentActions.ACTION_OPEN_TASKS,
+                deviceId = null,
+            ),
+        ).setCategory(Notification.CATEGORY_SERVICE)
+        .setOnlyAlertOnce(true)
+        .setShowWhen(false)
+        .setOngoing(true)
+        .addAction(stopAction(context, stopIntent))
+        .build()
+}
+
 private fun stopDeviceAction(
     context: Context,
     deviceId: String,

@@ -35,6 +35,15 @@ expect object TaskScheduler {
     fun openExactAlarmSettings()
 
     /**
+     * 让后台通道保持常驻（拉起保活前台服务）。
+     *
+     * 目的不是「执行任务」而是「让进程活着」：系统冻结普通后台进程后，闹钟广播投递不进来、
+     * WorkManager 也拿不到 CPU。挂着前台服务的进程优先级高得多，到点才有机会真正开跑。
+     * 未启用后台运行或平台不支持时实现为 no-op。
+     */
+    fun startBackgroundRun()
+
+    /**
      * 停止正在执行的后台通道（前台服务与排队中的 WorkManager 任务）。
      *
      * 任务页的停止按钮要能停下后台那一轮，但界面层拿不到平台服务类，只有这里能落地。

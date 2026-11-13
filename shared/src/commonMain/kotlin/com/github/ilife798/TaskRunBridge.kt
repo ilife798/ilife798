@@ -42,7 +42,31 @@ object TaskRunBridge {
     /** 界面订阅后台日志：后台每产生一行就回调一次，由界面追加进运行日志列表。 */
     var onLog: ((String) -> Unit)? = null
 
+    // 用户是否已请求停止后台这一轮。用私有 backing：`private set` 会与 requestStop 撞 JVM 签名
+    private var stopRequestedState: Boolean by mutableStateOf(false)
+
+    /**
+     * 用户是否已请求停止后台运行。
+     *
+     * 后台循环在每轮开始前检查它，命中就抛 [kotlinx.coroutines.CancellationException]，
+     * 上层据此显示「定时任务已停止」而不是「执行失败」。
+     */
+    val isStopRequested: Boolean
+        get() = stopRequestedState
+
+    /**
+     * 请求停止后台这一轮。
+     *
+     * 光停服务是不够的：`stopService` 只是让系统回收 Service，正在跑的协程要等
+     * `onDestroy` 里的 `scope.cancel()` 才被动结束，中间可能继续发请求；而且销毁路径
+     * 抛出的取消与真实异常难以区分，用户看到的就是「执行失败」。这里给一个显式意图。
+     */
+    fun requestStop() {
+        if (backgroundRunning) stopRequestedState = true
+    }
+
     fun startBackground() {
+        stopRequestedState = false
         backgroundRunning = true
     }
 

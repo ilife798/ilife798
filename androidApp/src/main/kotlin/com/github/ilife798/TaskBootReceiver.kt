@@ -12,8 +12,9 @@ import com.github.ilife798.data.model.decodeTaskSchedule
  * 重启会清空所有闹钟，不重排就等于定时任务悄悄失效，所以这个接收器必须导出——
  * 系统广播的发送方是系统进程。两个 action 都是受保护广播，外部应用无法伪造。
  *
- * 闹钟到点后的执行入口不在这里：[TaskScheduler] 用的是 Activity 型的 PendingIntent，
- * 到点直接回到 [MainActivity]，与手动按下「运行选中账号」共用同一套逻辑。
+ * 闹钟到点后的执行入口不在这里：前台运行走 Activity 型 PendingIntent 直接回到
+ * [MainActivity]（与手动「运行选中账号」共用同一套逻辑），后台运行走广播唤起
+ * [ScheduledTaskService] 的常驻前台服务。这里只负责重排，并顺带把常驻服务挂回去。
  */
 class TaskBootReceiver : BroadcastReceiver() {
     override fun onReceive(

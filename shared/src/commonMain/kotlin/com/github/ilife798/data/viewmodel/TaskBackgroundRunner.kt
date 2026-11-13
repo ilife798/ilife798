@@ -38,6 +38,8 @@ data class BackgroundAccountResult(
  */
 class TaskBackgroundRunner(
     private val api: IlifeApi,
+    /** 用户是否已经请求停止。每一轮开始前检查，停止请求能被立刻响应而不是等本轮跑完。 */
+    private val shouldStop: () -> Boolean = { false },
     private val onLog: (String) -> Unit = {},
 ) {
     private val rateLimiter = TokenRateLimiter()
@@ -57,6 +59,8 @@ class TaskBackgroundRunner(
         // 只有一个账号时不加前缀：与手动单账号运行的正文完全一致
         val showLabel = targets.size > 1
         targets.forEachIndexed { index, entry ->
+            // 每个账号开始前检查一次停止请求：用户按下停止后不该再动下一个账号
+            throwIfStopped()
             val label = labelOf(entry)
             onAccountStart?.invoke(index + 1, targets.size, label)
             onLog("开始执行 $label")
@@ -112,8 +116,9 @@ class TaskBackgroundRunner(
 
         for (mission in validMissions) {
             gained +=
-                runMission(account, mission, label) { round, maxCount ->
-                    emit(TaskProgress(gained, mission.name, round, maxCount))
+                runMission(account, mission, label) { round, maxCount, missionGained ->
+                    // 把本任务已拿到的分数一起算进去：否则多轮任务在跑完前通知上的积分一直不动
+                    emit(TaskProgress(gained + missionGained, mission.name, round, maxCount))
                 }
         }
 
@@ -234,7 +239,8 @@ class TaskBackgroundRunner(
                 }
             if (result.success) {
                 onLog("$label 签到成功")
-                return 0
+                // 返回签到实际拿到的分数：过去恒返回 0，通知里的积分就一直是 0
+                return merged.dailyScore
             }
             if (result.code != CODE_RATE_LIMITED || attempt == RATE_LIMIT_RETRIES - 1) {
                 onLog("$label 签到失败：${result.message}")
@@ -249,7 +255,7 @@ class TaskBackgroundRunner(
         account: Account,
         mission: MissionInfo,
         label: String,
-        onRound: (round: Int, maxCount: Int) -> Unit,
+        onRound: (round: Int, maxCount: Int, missionGained: Int) -> Unit,
     ): Int {
         val maxCount = mission.limit
         if (mission.dailyCompleted >= maxCount) {
@@ -259,10 +265,14 @@ class TaskBackgroundRunner(
         val execToken = mission.sourceToken
         val isApp = execToken == account.appToken
         var round = mission.dailyCompleted
+        // 本任务实际拿到的分数：过去这里恒返回 0，导致通知里的「积分:N」一直是 0，
+        // 只有收尾按累计积分增量核验时才被纠正一次。
+        var gained = 0
         while (round < maxCount) {
+            throwIfStopped()
             round++
             onLog("$label ${mission.name} ($round/$maxCount) 执行中…")
-            onRound(round, maxCount)
+            onRound(round, maxCount, gained)
             // 与界面路径一致：每个任务之间留出间隔，避免连续请求触发频控
             delay(MISSION_INTERVAL_MS.milliseconds)
             val wait = rateLimiter.reserveDelay(execToken, currentTimeMillis())
@@ -275,7 +285,7 @@ class TaskBackgroundRunner(
                     throw e
                 } catch (e: Exception) {
                     onLog("$label ${mission.name} 请求结果不明确，停止本轮")
-                    return 0
+                    return gained
                 }
             if (!result.success && result.code == CODE_RATE_LIMITED) {
                 delay(RATE_LIMIT_BACKOFF_MS.milliseconds)
@@ -285,19 +295,20 @@ class TaskBackgroundRunner(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        return 0
+                        return gained
                     }
             }
             if (!result.success) {
                 if (result.code == CODE_RATE_LIMITED) {
                     onLog("$label 请求频繁，跳过剩余任务")
-                    return 0
+                    return gained
                 }
                 onLog("$label ${mission.name} 失败：${result.message}")
-                return 0
+                return gained
             }
+            gained += mission.score
         }
-        return 0
+        return gained
     }
 
     /** 用累计积分增量核验到账；拿不到基准或差值异常时返回 null。 */
@@ -310,7 +321,19 @@ class TaskBackgroundRunner(
         val after = pointsOrNull(account) ?: return null
         val total = after.total ?: return null
         val delta = total - base
-        return if (delta < 0) null else delta.coerceAtLeast(fallback.coerceAtMost(delta))
+        if (delta < 0) return null
+        // 服务端增量是唯一可信来源；它可能大于本地累加（其它渠道同时入账），也可能小于
+        // 本地累加（任务实际没给分），所以直接用 delta，并保留 fallback 作为兜底日志。
+        if (delta == 0 && fallback > 0) onLog("累计积分未变化（本地估算 $fallback 分），以服务端为准")
+        return delta
+    }
+
+    /**
+     * 用户请求停止时抛出 [CancellationException]，而不是当作普通失败——这样上层
+     * `catch (CancellationException)` 会走「定时任务已停止」而不是「执行失败」。
+     */
+    private fun throwIfStopped() {
+        if (shouldStop()) throw CancellationException("用户已停止定时任务")
     }
 
     private suspend fun pointsOrNull(account: Account): PointsInfo? {

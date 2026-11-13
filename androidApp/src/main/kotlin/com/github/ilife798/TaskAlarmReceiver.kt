@@ -34,6 +34,13 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     ) {
         val action = intent?.action
         val appContext = context.applicationContext
+        if (action == TaskScheduler.ACTION_STOP_RESIDENT) {
+            // 保活通知上的「停止」：只撤掉常驻，计划本身不动，下一个闹钟还会再来。
+            logDebug("ILife798", "TaskAlarmReceiver: 收到关闭后台保活请求")
+            runCatching { appContext.stopService(Intent(appContext, ScheduledTaskService::class.java)) }
+                .onFailure { logDebug("ILife798", "TaskAlarmReceiver.stopResident: ${it.message}") }
+            return
+        }
         if (action != TaskScheduler.ACTION_RUN_BACKGROUND_TASKS) return
         logDebug("ILife798", "TaskAlarmReceiver: 收到后台闹钟广播")
         ScheduledTasks.bind(appContext)
@@ -62,7 +69,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
      * @return true 表示服务已被拉起（本轮交给服务执行），false 表示需要降级到 WorkManager。
      */
     private fun startResidentService(context: Context): Boolean {
-        val intent = Intent(context, ScheduledTaskService::class.java)
+        val intent =
+            Intent(context, ScheduledTaskService::class.java)
+                .setAction(TaskScheduler.ACTION_RUN_RESIDENT_TASKS)
         return runCatching {
             ContextCompat.startForegroundService(context, intent)
             logDebug("ILife798", "TaskAlarmReceiver: 已拉起前台服务执行")
