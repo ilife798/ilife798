@@ -129,8 +129,9 @@ struct RunTasksIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // bg=true：不在应用内跳转到任务页，用户回到前台时看到的就是原来那一页
-        let ok = dispatch("ilife798://tasks/run?bg=true")
+        // 不带 bg：进任务页并显示进度。Intent 必须把应用拉到前台才能被 Compose 消费，
+        // 既然已经在前台了，让用户看见正在跑比「悄悄跑」更诚实。
+        let ok = dispatch("ilife798://tasks/run")
         return .result(dialog: ok ? "已开始运行当前账号任务" : "链接未被识别，任务没有开始")
     }
 }
@@ -141,7 +142,7 @@ struct RunAllTasksIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let ok = dispatch("ilife798://tasks/run/all?bg=true")
+        let ok = dispatch("ilife798://tasks/run/all")
         return .result(dialog: ok ? "已开始依次运行全部账号" : "链接未被识别，任务没有开始")
     }
 }
@@ -152,7 +153,7 @@ struct StopTasksIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let ok = dispatch("ilife798://tasks/stop?bg=true")
+        let ok = dispatch("ilife798://tasks/stop")
         return .result(dialog: ok ? "已停止积分任务" : "链接未被识别，无法停止")
     }
 }
@@ -168,11 +169,11 @@ struct RunDeviceIntent: AppIntent {
     var device: DeviceEntity
 
     static var parameterSummary: some ParameterSummary {
-        Summary("启动 \(.$device)")
+        Summary("启动 \(\.$device)")
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let ok = dispatch("ilife798://devices/\(device.id)/run?bg=true")
+        let ok = dispatch("ilife798://devices/\(device.id)/run")
         return .result(dialog: ok ? "已开始启动 \(device.name)" : "链接未被识别，设备没有启动")
     }
 }
@@ -186,11 +187,11 @@ struct StopDeviceIntent: AppIntent {
     var device: DeviceEntity
 
     static var parameterSummary: some ParameterSummary {
-        Summary("停止 \(.$device)")
+        Summary("停止 \(\.$device)")
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let ok = dispatch("ilife798://devices/\(device.id)/stop?bg=true")
+        let ok = dispatch("ilife798://devices/\(device.id)/stop")
         return .result(dialog: ok ? "已停止 \(device.name)" : "链接未被识别，无法停止")
     }
 }
@@ -211,11 +212,16 @@ struct AddAccountIntent: AppIntent {
     var appToken: String
 
     static var parameterSummary: some ParameterSummary {
-        Summary("添加账号，设备控制凭据 \(.$appToken)")
+        Summary("添加账号，设备控制凭据 \(\.$appToken)")
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let encoded = appToken.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? appToken
+        // 凭据里常出现 -._~ 之类的字符，和 Kotlin 侧 percentEncode 的白名单保持一致，
+        // 否则会多转义一层，服务端拿到的凭据就变了。
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encoded = appToken.addingPercentEncoding(withAllowedCharacters: allowed) ?? appToken
+        // bg=true：静默导入，不把用户丢到登录页
         let ok = dispatch("ilife798://accounts/add/token?appToken=\(encoded)&bg=true")
         return .result(dialog: ok ? "已提交导入，结果请在应用内查看" : "链接未被识别，账号没有导入")
     }
@@ -230,7 +236,7 @@ struct SwitchAccountIntent: AppIntent {
     var account: AccountEntity
 
     static var parameterSummary: some ParameterSummary {
-        Summary("切换到 \(.$account)")
+        Summary("切换到 \(\.$account)")
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
