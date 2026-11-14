@@ -23,6 +23,7 @@ import com.github.ilife798.data.model.decodeDeviceAliases
 import com.github.ilife798.data.model.decodeDeviceNotes
 import com.github.ilife798.data.model.encodeDeviceAliases
 import com.github.ilife798.data.model.encodeDeviceNotes
+import com.github.ilife798.data.model.encodeDeviceSnapshot
 import com.github.ilife798.logDebug
 import com.github.ilife798.update.requestNotificationPermission
 import com.github.ilife798.util.DeviceLinkParser
@@ -517,6 +518,11 @@ class DeviceController(
                         devices = favorites,
                         account = state.account.copy(uid = master.accountId.ifEmpty { state.account.uid }),
                     )
+                }
+                // 顺手留一份快照给 iOS App Intents：Siri 唤起时没有界面、也未必有网络，
+                // 下拉里得先有设备可选。写失败不影响列表，静默忽略。
+                runCatching {
+                    AppStorage.instance.saveString(StorageKeys.DEVICE_SNAPSHOT, encodeDeviceSnapshot(favorites))
                 }
                 devices.forEach { dto ->
                     if (!isCurrentLoad()) return@launch

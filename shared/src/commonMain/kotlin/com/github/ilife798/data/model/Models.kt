@@ -17,6 +17,7 @@ data class Account(
     val hasAnyToken: Boolean get() = preferredToken.isNotEmpty()
 }
 
+@Serializable
 data class Device(
     val id: String,
     val name: String,

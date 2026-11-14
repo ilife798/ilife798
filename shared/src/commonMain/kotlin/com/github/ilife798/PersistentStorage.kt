@@ -50,6 +50,10 @@ object StorageKeys {
     const val THEME_MODE = "setting_theme_mode"
     const val HOME_DEVICE_TYPE = "home_device_type"
     const val DEVICE_NOTES = "device_notes"
+
+    // 收藏设备的最后一次快照。仅供 iOS App Intents 在无界面上下文中
+    // 枚举设备用；界面始终以服务端返回的实时列表为准，不读这份缓存。
+    const val DEVICE_SNAPSHOT = "device_snapshot"
     const val DEVICE_ALIASES = "device_aliases"
     const val GITHUB_PROXY = "setting_github_proxy"
     const val DEVELOPER_MODE = "setting_developer_mode"
