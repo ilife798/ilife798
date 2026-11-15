@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.RunNotifications
+import com.github.ilife798.TaskKeepAlive
 import com.github.ilife798.TaskRunBridge
 import com.github.ilife798.data.api.CODE_RATE_LIMITED
 import com.github.ilife798.data.api.IlifeApi
@@ -408,6 +409,9 @@ class TaskController(
         // 若等到协程内部才置位，它会误判成没在跑，提前切号并取消刚启动的这一轮。
         onLoadingChange(true)
         TaskRunBridge.setUiRunning(true)
+        // 申请保活：iOS 靠静音音频让进程在后台活下去，Android 为空实现。
+        // 与下面的 finally 成对，中间任何出口都会释放。
+        TaskKeepAlive.begin()
         taskJob =
             scope.launch {
                 onError(null)
@@ -503,6 +507,8 @@ class TaskController(
                     }
                 } finally {
                     RunNotifications.removeTask()
+                    // 释放静音保活：任务结束（正常/异常/停止）都必须走到，否则音频会话会一直占着
+                    TaskKeepAlive.end()
                     TaskRunBridge.setUiRunning(false)
                     if (isCurrentAccount()) {
                         onLoadingChange(false)

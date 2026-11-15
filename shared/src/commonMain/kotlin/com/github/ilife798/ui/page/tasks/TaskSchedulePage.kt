@@ -26,9 +26,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.ilife798.TaskScheduler
+import com.github.ilife798.copyToClipboard
+import com.github.ilife798.data.model.DEFAULT_SHORTCUT_SCHEME
 import com.github.ilife798.data.model.KeepAliveVendor
+import com.github.ilife798.data.model.ShortcutAction
 import com.github.ilife798.data.model.TaskSchedule
+import com.github.ilife798.data.model.buildShortcutUrl
 import com.github.ilife798.data.viewmodel.AppViewModel
+import com.github.ilife798.isIOS
 import com.github.ilife798.ui.component.BlurredTopAppBar
 import com.github.ilife798.ui.component.PageScrollColumn
 import com.github.ilife798.ui.component.SwitchPreference
@@ -36,6 +41,7 @@ import com.github.ilife798.ui.theme.rememberAppBlurBackdrop
 import com.github.ilife798.util.isIgnoringBatteryOptimizations
 import com.github.ilife798.util.keepAliveVendor
 import com.github.ilife798.util.openBatteryOptimizationSettings
+import com.github.ilife798.util.openExternalUrl
 import com.github.ilife798.util.openKeepAliveSettings
 import com.github.ilife798.util.openRecentTasks
 import kotlinx.coroutines.delay
@@ -59,11 +65,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun TaskSchedulePage(
     viewModel: AppViewModel,
     onBack: () -> Unit,
+    onOpenShortcutPage: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val blurBackdrop = rememberAppBlurBackdrop(viewModel.state.appBlur)
     val schedule = viewModel.state.taskSchedule
     val supported = TaskScheduler.supported
+    // iOS 没有能自己准点唤醒的定时接口（BGTaskScheduler 只保证机会性调度），
+    // 定时这一环交给系统「快捷指令」的个人自动化；页面上的运行方式与保活引导随之换成引导卡片。
+    val needsShortcutTrigger = isIOS
+    // 时间和重复在 iOS 上不再是「给本机闹钟的参数」，而是「给用户抄进快捷指令的参数」，仍然要能改。
+    val timeEditable = supported || needsShortcutTrigger
     var hour by remember(schedule.hour) { mutableIntStateOf(schedule.hour) }
     var minute by remember(schedule.minute) { mutableIntStateOf(schedule.minute) }
 
@@ -87,25 +99,36 @@ fun TaskSchedulePage(
             contentPadding = paddingValues,
         ) {
             Text(
-                text = "到设定时间后，依次执行所有已登录账号的积分任务，执行过程与手动按下「运行选中账号」完全一致，进度显示在通知栏。",
+                text =
+                    if (needsShortcutTrigger) {
+                        "依次执行所有已登录账号的积分任务，执行过程与手动按下「运行选中账号」完全一致。iOS 上由系统「快捷指令」到点触发。"
+                    } else {
+                        "到设定时间后，依次执行所有已登录账号的积分任务，执行过程与手动按下「运行选中账号」完全一致，进度显示在通知栏。"
+                    },
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
 
-            if (!supported) {
+            if (needsShortcutTrigger) {
+                ShortcutTriggerCard(schedule = schedule, onOpenShortcutPage = onOpenShortcutPage)
+            } else if (!supported) {
                 UnsupportedCard()
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    SwitchPreference(
-                        title = "定时执行积分任务",
-                        summary = if (schedule.enabled) "${schedule.timeText} · ${schedule.weekdayText}" else "未启用",
-                        checked = schedule.enabled,
-                        onCheckedChange = { enabled -> update { it.copy(enabled = enabled) } },
-                        enabled = supported,
-                    )
+            // iOS 没有本机调度器，这个开关拨了也不会有人执行，直接不显示；
+            // 下面的时间与重复仍然可改，因为它们的作用变成「告诉用户该往快捷指令里填什么」。
+            if (!needsShortcutTrigger) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        SwitchPreference(
+                            title = "定时执行积分任务",
+                            summary = if (schedule.enabled) "${schedule.timeText} · ${schedule.weekdayText}" else "未启用",
+                            checked = schedule.enabled,
+                            onCheckedChange = { enabled -> update { it.copy(enabled = enabled) } },
+                            enabled = supported,
+                        )
+                    }
                 }
             }
 
@@ -121,7 +144,7 @@ fun TaskSchedulePage(
                             value = hour,
                             onValueChange = { hour = it },
                             modifier = Modifier.weight(1f),
-                            enabled = supported,
+                            enabled = timeEditable,
                             range = 0..23,
                             label = { it.toString().padStart(2, '0') },
                         )
@@ -134,13 +157,13 @@ fun TaskSchedulePage(
                             value = minute,
                             onValueChange = { minute = it },
                             modifier = Modifier.weight(1f),
-                            enabled = supported,
+                            enabled = timeEditable,
                             range = 0..59,
                             label = { it.toString().padStart(2, '0') },
                         )
                     }
                     Text(
-                        text = "时间以设备本地时区为准。",
+                        text = if (needsShortcutTrigger) "请把上面的时间填进快捷指令的自动化里，时区以设备本地为准。" else "时间以设备本地时区为准。",
                         style = MiuixTheme.textStyles.body2,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
@@ -161,7 +184,7 @@ fun TaskSchedulePage(
                             WeekdayChip(
                                 label = shortName,
                                 selected = dayOfWeek in schedule.weekdays,
-                                enabled = supported,
+                                enabled = timeEditable,
                                 modifier = Modifier.weight(1f),
                                 onClick = {
                                     update { current ->
@@ -186,34 +209,38 @@ fun TaskSchedulePage(
                 }
             }
 
-            // 到点后是拉起应用执行，还是留在后台静默跑完
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    OverlayDropdownPreference(
-                        title = "运行方式",
-                        items = TaskSchedule.RUN_MODES,
-                        selectedIndex = if (schedule.runInBackground) 1 else 0,
-                        enabled = supported,
-                        onSelectedIndexChange = { index ->
-                            update { it.copy(runInBackground = index == 1) }
-                        },
-                    )
-                    Text(
-                        text =
-                            if (schedule.runInBackground) {
-                                "到点后在后台静默执行，不会打断你正在做的事；系统可能因省电策略延后或限制执行。"
-                            } else {
-                                "到点后打开应用并执行，执行过程与手动按下「运行选中账号」完全一致。"
+            // 到点后是拉起应用执行，还是留在后台静默跑完。
+            // iOS 上没有「后台运行」这个选项可言（执行与否由快捷指令决定），整块隐藏。
+            if (!needsShortcutTrigger) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        OverlayDropdownPreference(
+                            title = "运行方式",
+                            items = TaskSchedule.RUN_MODES,
+                            selectedIndex = if (schedule.runInBackground) 1 else 0,
+                            enabled = supported,
+                            onSelectedIndexChange = { index ->
+                                update { it.copy(runInBackground = index == 1) }
                             },
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
-                    )
+                        )
+                        Text(
+                            text =
+                                if (schedule.runInBackground) {
+                                    "到点后在后台静默执行，不会打断你正在做的事；系统可能因省电策略延后或限制执行。"
+                                } else {
+                                    "到点后打开应用并执行，执行过程与手动按下「运行选中账号」完全一致。"
+                                },
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
+                        )
+                    }
                 }
             }
 
+            // iOS 上闹钟由快捷指令持有，应用内算不出真实的下次触发时间，不展示以免误导。
             val nextRun = viewModel.taskScheduleNextRunText()
-            if (schedule.enabled && nextRun != null) {
+            if (!needsShortcutTrigger && schedule.enabled && nextRun != null) {
                 Text(
                     text = "下次执行：$nextRun",
                     style = MiuixTheme.textStyles.body2,
@@ -238,7 +265,12 @@ fun TaskSchedulePage(
             }
 
             Text(
-                text = "定时触发依赖系统闹钟，省电策略可能把执行推迟数分钟；应用被强制停止或重装后，需要重新打开一次应用才会恢复定时。",
+                text =
+                    if (needsShortcutTrigger) {
+                        "iOS 不允许应用自己准点唤醒，个人自动化由系统调度，可能延后数分钟；触发后本应用会靠静音音频维持后台运行直到任务结束，系统仍可能中断。"
+                    } else {
+                        "定时触发依赖系统闹钟，省电策略可能把执行推迟数分钟；应用被强制停止或重装后，需要重新打开一次应用才会恢复定时。"
+                    },
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
@@ -283,6 +315,84 @@ private fun WeekdayChip(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/**
+ * iOS 专属的「用快捷指令触发」引导卡。
+ *
+ * 为什么不干脆整页禁用：iOS 上没有可用的系统定时接口，但「到点跑一遍批量任务」这件事
+ * 用快捷指令的个人自动化能做成——应用这边只需要暴露一条链接。所以时间与重复仍然留在这里
+ * 由用户先定好，卡片把「把这段时间和这条链接填进快捷指令」讲清楚。
+ */
+@Composable
+private fun ShortcutTriggerCard(
+    schedule: TaskSchedule,
+    onOpenShortcutPage: () -> Unit,
+) {
+    val runAllUrl = buildShortcutUrl(DEFAULT_SHORTCUT_SCHEME, ShortcutAction.RunAllTasks)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors =
+            CardDefaults.defaultColors(
+                color = MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                contentColor = MiuixTheme.colorScheme.onSurface,
+            ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "用「快捷指令」定时运行",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text =
+                    "iOS 不允许应用自己准点唤醒自己，定时需要交给系统「快捷指令」。" +
+                        "在快捷指令里新建一个「个人自动化 → 特定时间」，设成 " +
+                        schedule.timeText +
+                        "（" +
+                        schedule.weekdayText +
+                        "），动作选「打开 URL」并填入下面的链接即可。",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = runAllUrl,
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.primary,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { copyToClipboard(runAllUrl, "已复制链接") }
+                        .padding(vertical = 4.dp),
+            )
+            Text(
+                text = "点击链接即可复制。链接里带 bg=true，触发后不跳转到具体页面，直接开始跑任务；应用本身仍会被系统打开。",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "打开「快捷指令」",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { openExternalUrl(SHORTCUTS_APP_URL) }
+                        .padding(vertical = 6.dp),
+            )
+            Text(
+                text = "查看更多可用的链接",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenShortcutPage).padding(vertical = 6.dp),
+            )
+        }
     }
 }
 
@@ -428,3 +538,6 @@ private fun KeepAliveCard() {
 
 /** 拨盘停止滚动后才落盘的等待时间。 */
 private const val TIME_PICK_DEBOUNCE_MS = 400L
+
+/** 快捷指令应用自己的 URL scheme，用于把用户送过去建自动化。 */
+private const val SHORTCUTS_APP_URL = "shortcuts://"

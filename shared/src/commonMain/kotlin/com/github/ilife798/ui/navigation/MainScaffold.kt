@@ -671,7 +671,11 @@ fun MainScaffold(viewModel: AppViewModel) {
             }
             entry<Page.TaskSchedule>(transition = detailTransition) {
                 NavEntry(interceptPredictiveBack, onBack) {
-                    TaskSchedulePage(viewModel = viewModel, onBack = onBack)
+                    TaskSchedulePage(
+                        viewModel = viewModel,
+                        onBack = onBack,
+                        onOpenShortcutPage = { navigate(Page.Shortcut) },
+                    )
                 }
             }
             entry<Page.Shortcut>(transition = detailTransition) {

@@ -119,6 +119,15 @@ actual fun openKeepAliveSettings() {
     logDebug("ILife798", "openKeepAliveSettings: 无可用入口")
 }
 
+/**
+ * 任务执行期间的进程保活。
+ *
+ * Android 侧不需要额外动作：界面通道的任务本来就在前台进程里跑，
+ * 后台通道则由 [com.github.ilife798.TaskScheduler.startBackgroundRun] 拉起前台服务，
+ * 这里再起一个常驻通道只会多一条通知。所以实现为空。
+ */
+actual fun setTaskKeepAlive(enabled: Boolean) = Unit
+
 /** 打开最近任务界面，引导用户给应用加锁。 */
 actual fun openRecentTasks() {
     val context = runCatching { ApplicationContext.instance }.getOrNull() ?: return

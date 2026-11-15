@@ -20,7 +20,11 @@ actual object TaskScheduler {
 
     actual fun openExactAlarmSettings() = Unit
 
-    actual fun startBackgroundRun() = Unit
+    /**
+     * iOS 没有「保活服务」这种常驻进程，任务执行期间的存活由静音音频承担。
+     * 语义保持与 Android 一致：申请让通道活着，不负责触发。
+     */
+    actual fun startBackgroundRun() = IosTaskKeepAlive.setEnabled(true)
 
-    actual fun stopBackgroundRun() = Unit
+    actual fun stopBackgroundRun() = IosTaskKeepAlive.setEnabled(false)
 }

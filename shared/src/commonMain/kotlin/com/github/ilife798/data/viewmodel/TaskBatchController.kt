@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.github.ilife798.RunNotifications
+import com.github.ilife798.TaskKeepAlive
 import com.github.ilife798.data.model.AccountEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -55,6 +56,9 @@ class TaskBatchController(
             }
         if (targets.isEmpty()) return
         batching = true
+        // 批量自己也持有一份保活：每个账号跑完单轮会释放自己那份，若这里不持有，
+        // 账号之间的间隙会把静音音频关掉、再开一次，保活出现断续。
+        TaskKeepAlive.begin()
         batchJob =
             scope.launch {
                 val originUid = currentUid()
@@ -99,6 +103,7 @@ class TaskBatchController(
                     if (back in accounts().indices) switchAccount(back)
                     // 批量结束后回到单账号语义：通知不再显示账号前缀
                     RunNotifications.updateTaskAccount(null)
+                    TaskKeepAlive.end()
                     batching = false
                     batchJob = null
                 }

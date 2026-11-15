@@ -10,3 +10,6 @@ expect fun openKeepAliveSettings()
 
 // 跳转到该厂商的任务列表界面，供用户给本应用加锁（防一键清理）。
 expect fun openRecentTasks()
+
+// 任务执行期间的进程保活开关。iOS 用静音音频维持后台存活；Android 已有前台服务，实现为 no-op。
+expect fun setTaskKeepAlive(enabled: Boolean)
